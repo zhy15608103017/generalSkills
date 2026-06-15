@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Code Review Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "summary",
+    "blocking_findings",
+    "warnings",
+    "verification_notes",
+    "confidence"
+  ],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "fail", "needs_human"]
+    },
+    "verdict_label": {
+      "type": "string",
+      "description": "Chinese display label added by the runner in final output."
+    },
+    "summary": {
+      "type": "string"
+    },
+    "blocking_findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "verification_notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "title",
+        "file",
+        "line",
+        "evidence",
+        "impact",
+        "suggested_fix"
+      ],
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2", "P3"]
+        },
+        "title": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "impact": {
+          "type": "string"
+        },
+        "suggested_fix": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "array",
+          "description": "Reviewer provenance added by the runner in final output.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["reviewer", "provider", "model"],
+            "properties": {
+              "reviewer": {
+                "type": "string",
+                "enum": ["primary", "second", "unknown"]
+              },
+              "provider": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

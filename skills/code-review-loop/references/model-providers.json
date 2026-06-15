@@ -1,0 +1,66 @@
+{
+  "defaultProvider": "deepseek",
+  "providers": {
+    "deepseek": {
+      "aliases": [],
+      "model": "deepseek-v4-pro",
+      "transport": "openai-compatible",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiStyle": "chat",
+      "apiKeyEnv": ["DEEPSEEK_API_KEY"],
+      "responseFormat": "json_object"
+    },
+    "openai": {
+      "aliases": [],
+      "model": "gpt-5.5",
+      "transport": "responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiStyle": "responses",
+      "apiKeyEnv": ["OPENAI_API_KEY"],
+      "responseFormat": "json_schema"
+    },
+    "mimo": {
+      "aliases": ["xiaomi"],
+      "model": "mimo-v2.5-pro",
+      "transport": "openai-compatible",
+      "baseUrl": "https://api.xiaomimimo.com/v1",
+      "apiStyle": "chat",
+      "apiKeyEnv": ["MIMO_API_KEY", "XIAOMI_API_KEY"],
+      "baseUrlEnv": ["MIMO_BASE_URL", "XIAOMI_BASE_URL"],
+      "responseFormat": "json_object"
+    },
+    "glm": {
+      "aliases": ["zhipu", "zai"],
+      "model": "glm-5.1",
+      "transport": "openai-compatible",
+      "baseUrl": "https://api.z.ai/api/paas/v4",
+      "apiStyle": "chat",
+      "apiKeyEnv": ["ZAI_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY"],
+      "baseUrlEnv": ["ZAI_BASE_URL", "ZHIPU_BASE_URL"],
+      "responseFormat": "json_object",
+      "requestOptions": {
+        "thinking": {
+          "type": "enabled"
+        }
+      }
+    },
+    "openai-compatible": {
+      "aliases": ["compatible"],
+      "model": "gpt-5.5",
+      "transport": "openai-compatible",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiStyle": "chat",
+      "apiKeyEnv": [],
+      "responseFormat": "json_object"
+    },
+    "cli": {
+      "aliases": ["local-cli"],
+      "model": "cli-reviewer",
+      "transport": "cli",
+      "apiKeyEnv": [],
+      "baseUrlEnv": [],
+      "timeoutMs": 180000,
+      "retries": 0
+    }
+  }
+}

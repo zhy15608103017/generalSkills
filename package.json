@@ -1,0 +1,42 @@
+{
+  "name": "general-skills",
+  "version": "0.1.0",
+  "description": "A lightweight CLI for installing reusable Agent Skills into AI coding tools.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhy15608103017/generalSkills.git"
+  },
+  "keywords": [
+    "agent-skills",
+    "codex",
+    "claude-code",
+    "cursor",
+    "trae",
+    "windsurf",
+    "gemini-cli",
+    "opencode",
+    "cli"
+  ],
+  "bin": {
+    "gskills": "./bin/gskills.mjs"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "templates/",
+    "README.md",
+    "docs/compatibility.md"
+  ],
+  "scripts": {
+    "test": "node --test tests",
+    "validate": "node scripts/validate-skills.mjs",
+    "new-skill": "node scripts/new-skill.mjs",
+    "install-skills": "node scripts/install-skills.mjs",
+    "gskills": "node bin/gskills.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

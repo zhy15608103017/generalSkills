@@ -1,0 +1,3 @@
+display_name: Code Review Loop
+short_description: Run local AI review loops over Git changes.
+default_prompt: Review my local code changes with an external model and return blocking findings before completion.
