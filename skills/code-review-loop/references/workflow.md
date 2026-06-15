@@ -31,6 +31,12 @@ node .agents/skills/code-review-loop/scripts/write-review-context.mjs --request 
 node .agents/skills/code-review-loop/scripts/write-review-context.mjs --from-stdin
 ```
 
+在 Windows PowerShell 中，管道传给原生命令的中文可能会先被替换成 `?`。需要写入完整 Markdown 时，更推荐先保存为 UTF-8 文件再读取：
+
+```bash
+node .agents/skills/code-review-loop/scripts/write-review-context.mjs --from-file .ai-review/review-context/draft-request.md
+```
+
 2. 确认本地有需要审核的改动。
 
 ```bash

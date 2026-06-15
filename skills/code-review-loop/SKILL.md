@@ -47,6 +47,12 @@ Or write a full Markdown context from stdin:
 node .agents/skills/code-review-loop/scripts/write-review-context.mjs --from-stdin
 ```
 
+On Windows PowerShell, piping non-ASCII Markdown into native processes can replace Chinese text with `?` before Node receives it. For full Markdown context on Windows, prefer a UTF-8 file:
+
+```bash
+node .agents/skills/code-review-loop/scripts/write-review-context.mjs --from-file .ai-review/review-context/draft-request.md
+```
+
 ## Core Rule
 
 Do not let the reviewer model edit files directly. It must return structured findings. If the verdict is `fail`, fix the blocking findings in the current workspace, run local verification, and review again.

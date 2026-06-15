@@ -7,7 +7,7 @@ const MAX_FIELD_CHARS = 4000;
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const outPath = path.resolve(process.cwd(), args.out || DEFAULT_OUT);
-  const content = args.fromStdin ? await readStdin() : renderContext(args);
+  const content = await readContent(args);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.writeFile(outPath, normalizeMarkdown(content), "utf8");
@@ -23,6 +23,9 @@ function parseArgs(argv) {
 
     if (arg === "--from-stdin") {
       args.fromStdin = true;
+    } else if (arg === "--from-file" && next) {
+      args.fromFile = next;
+      index += 1;
     } else if (arg === "--out" && next) {
       args.out = next;
       index += 1;
@@ -45,6 +48,29 @@ function parseArgs(argv) {
   }
 
   return args;
+}
+
+async function readContent(args) {
+  if (args.fromStdin && args.fromFile) {
+    throw new Error("--from-stdin and --from-file cannot be used together.");
+  }
+
+  if (args.fromFile) {
+    const filePath = path.resolve(process.cwd(), args.fromFile);
+    return await fs.readFile(filePath, "utf8");
+  }
+
+  if (args.fromStdin) {
+    const content = await readStdin();
+    if (looksQuestionMarkCorrupted(content)) {
+      throw new Error(
+        "stdin 内容看起来已经发生编码损坏（出现大量连续问号）。在 Windows PowerShell 中，请改用 --request/--design/--acceptance 等参数，或先保存为 UTF-8 文件后使用 --from-file <path>。"
+      );
+    }
+    return content;
+  }
+
+  return renderContext(args);
 }
 
 function renderContext(args) {
@@ -91,6 +117,16 @@ function compact(value = "") {
   const text = String(value).trim();
   if (text.length <= MAX_FIELD_CHARS) return text;
   return `${text.slice(0, MAX_FIELD_CHARS)}\n\n[已截断：单字段超过 ${MAX_FIELD_CHARS} 字符，请改写为摘要。]`;
+}
+
+function looksQuestionMarkCorrupted(content) {
+  const text = String(content || "");
+  const questionCount = (text.match(/\?/g) || []).length;
+  const visibleCount = text.replace(/\s/g, "").length;
+  if (questionCount < 8 || visibleCount === 0) return false;
+  if (!/\?{4,}/.test(text)) return false;
+  if (/[\u4e00-\u9fff]/.test(text)) return false;
+  return questionCount / visibleCount > 0.25;
 }
 
 main().catch((error) => {
