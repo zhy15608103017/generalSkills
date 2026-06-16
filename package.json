@@ -20,7 +20,7 @@
     "cli"
   ],
   "bin": {
-    "gskills": "./bin/gskills.mjs"
+    "gskills": "bin/gskills.mjs"
   },
   "files": [
     "bin/",
