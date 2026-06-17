@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -38,85 +38,85 @@ export async function installSkills({
 
   const targets = resolveToolTargets(tool);
   const installed = [];
+  const targetsBySkill = new Map();
   for (const target of targets) {
     for (const skillDir of skillDirs) {
       const destination = path.join(destDir, target.relativePath, skillDir.name);
       await copyDirectory(skillDir.path, destination);
       await writeTargetConfig({ destDir, target });
-      installed.push({
+      const entry = {
         tool: target.tool,
         skillName: skillDir.name,
         path: destination
+      };
+      installed.push(entry);
+      const skillTargets = targetsBySkill.get(skillDir.name) || [];
+      skillTargets.push({
+        tool: target.tool,
+        relativePath: target.relativePath,
+        installedPath: destination
       });
+      targetsBySkill.set(skillDir.name, skillTargets);
     }
   }
 
-  const agentsInstructions = [];
-  for (const skillDir of skillDirs) {
-    const injected = await installAgentsInstructions({ destDir, skillDir });
-    if (injected) {
-      agentsInstructions.push(injected);
+  const installScripts = [];
+  try {
+    for (const skillDir of skillDirs) {
+      const script = await runInstallScript({
+        destDir,
+        selectedTool: tool,
+        skillDir,
+        targets: targetsBySkill.get(skillDir.name) || []
+      });
+      if (script) {
+        installScripts.push(script);
+      }
     }
+  } finally {
+    await removeInstalledLifecycleDirs(installed);
   }
 
-  return { installed, agentsInstructions };
+  return { installed, installScripts };
 }
 
-async function installAgentsInstructions({ destDir, skillDir }) {
-  const sourcePath = path.join(skillDir.path, "assets", "AGENTS.md");
-  if (!(await pathExists(sourcePath))) {
+async function runInstallScript({ destDir, selectedTool, skillDir, targets }) {
+  const scriptPath = path.join(skillDir.path, ".gskills", "install.mjs");
+  if (!(await pathExists(scriptPath))) {
     return null;
   }
 
-  const sourceText = await readFile(sourcePath, "utf8");
-  const instructions = sourceText.trim();
-  if (!instructions) {
-    return null;
+  const moduleUrl = await cacheBustedFileUrl(scriptPath);
+  const module = await import(moduleUrl);
+  if (typeof module.install !== "function") {
+    throw new Error(`${skillDir.name}: .gskills/install.mjs must export an install(context) function.`);
   }
 
-  const agentsPath = path.join(destDir, "AGENTS.md");
-  const existingText = (await pathExists(agentsPath)) ? await readFile(agentsPath, "utf8") : "";
-  const updatedText = upsertAgentsBlock(existingText, skillDir.name, instructions);
-
-  await mkdir(path.dirname(agentsPath), { recursive: true });
-  await writeFile(agentsPath, updatedText, "utf8");
+  await module.install({
+    skillName: skillDir.name,
+    skillDir: skillDir.path,
+    destDir,
+    tool: selectedTool,
+    targets
+  });
 
   return {
     skillName: skillDir.name,
-    path: agentsPath
+    path: path.join(".gskills", "install.mjs")
   };
 }
 
-function upsertAgentsBlock(text, skillName, instructions) {
-  const startMarker = `<!-- gskills:start ${skillName} -->`;
-  const endMarker = `<!-- gskills:end ${skillName} -->`;
-  const block = [startMarker, instructions, endMarker].join("\n");
-  const blockPattern = new RegExp(
-    `${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}`,
-    "g"
-  );
-  let blockFound = false;
-  const replacedText = text.replace(blockPattern, () => {
-    if (blockFound) {
-      return "";
-    }
-    blockFound = true;
-    return block;
-  });
-
-  if (blockFound) {
-    return `${replacedText.trimEnd()}\n`;
-  }
-
-  const existingText = text.trimEnd();
-  if (!existingText) {
-    return `${block}\n`;
-  }
-  return `${existingText}\n\n${block}\n`;
+async function cacheBustedFileUrl(filePath) {
+  const fileStat = await stat(filePath);
+  const url = pathToFileURL(filePath);
+  url.searchParams.set("mtime", String(fileStat.mtimeMs));
+  return url.href;
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+async function removeInstalledLifecycleDirs(installed) {
+  for (const entry of installed) {
+    await rm(path.join(entry.path, ".gskills"), { recursive: true, force: true });
+  }
 }
 
 async function main() {
@@ -132,8 +132,8 @@ async function main() {
   for (const entry of result.installed) {
     console.log(`Installed ${entry.skillName} for ${entry.tool}: ${entry.path}`);
   }
-  for (const entry of result.agentsInstructions) {
-    console.log(`Updated AGENTS.md for ${entry.skillName}: ${entry.path}`);
+  for (const entry of result.installScripts) {
+    console.log(`Ran install script for ${entry.skillName}: ${entry.path}`);
   }
   if (result.installed.length === 0) {
     console.log("No skills to install.");

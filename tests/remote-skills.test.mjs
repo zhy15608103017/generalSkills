@@ -26,6 +26,7 @@ function createMockFetch() {
   const tree = {
     tree: [
       { path: "skills/alpha-skill/SKILL.md", type: "blob" },
+      { path: "skills/alpha-skill/.gskills/install.mjs", type: "blob" },
       { path: "skills/alpha-skill/assets/AGENTS.md", type: "blob" },
       { path: "skills/alpha-skill/references/guide.md", type: "blob" },
       { path: "skills/beta-skill/SKILL.md", type: "blob" },
@@ -36,6 +37,21 @@ function createMockFetch() {
     [
       "skills/alpha-skill/SKILL.md",
       "---\nname: alpha-skill\ndescription: Use when installing alpha.\n---\n\n# Alpha\n"
+    ],
+    [
+      "skills/alpha-skill/.gskills/install.mjs",
+      [
+        "import path from \"node:path\";",
+        "import { mkdir, readFile, writeFile } from \"node:fs/promises\";",
+        "",
+        "export async function install(context) {",
+        "  const sourcePath = path.join(context.skillDir, \"assets\", \"AGENTS.md\");",
+        "  const instructions = (await readFile(sourcePath, \"utf8\")).trim();",
+        "  const agentsPath = path.join(context.destDir, \"AGENTS.md\");",
+        "  await mkdir(path.dirname(agentsPath), { recursive: true });",
+        "  await writeFile(agentsPath, `<!-- gskills:start ${context.skillName} -->\\n${instructions}\\n<!-- gskills:end ${context.skillName} -->\\n`, \"utf8\");",
+        "}"
+      ].join("\n")
     ],
     ["skills/alpha-skill/assets/AGENTS.md", "## Alpha Instructions\n\n- Use alpha style.\n"],
     ["skills/alpha-skill/references/guide.md", "# Alpha Guide\n"],
@@ -128,6 +144,7 @@ test("adds multiple remote skills into all tool directories", async () => {
     });
 
     assert.equal(result.installed.length, 14);
+    assert.deepEqual(result.installScripts.map((entry) => entry.skillName), ["alpha-skill"]);
     for (const toolDir of [
       ".agents/skills",
       ".claude/skills",
@@ -146,6 +163,10 @@ test("adds multiple remote skills into all tool directories", async () => {
       assert.match(alpha, /name: alpha-skill/);
       assert.match(guide, /Alpha Guide/);
       assert.match(beta, /name: beta-skill/);
+      await assert.rejects(
+        () => stat(path.join(destDir, toolDir, "alpha-skill", ".gskills")),
+        /ENOENT/
+      );
     }
 
     const agentsText = await readFile(path.join(destDir, "AGENTS.md"), "utf8");

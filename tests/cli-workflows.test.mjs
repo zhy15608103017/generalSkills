@@ -129,12 +129,12 @@ test("install-skills CLI prefers --aicoding over legacy --tool", async () => {
   });
 });
 
-test("installs skill AGENTS instructions into the target project", async () => {
+test("does not install AGENTS instructions from assets without an install hook", async () => {
   await withTempDir(async (repoDir) => {
     await createSkill({
       repoDir,
       name: "maintainable-code",
-      description: "Use when testing AGENTS injection.",
+      description: "Use when testing disabled AGENTS asset compatibility.",
       resources: ["assets"]
     });
 
@@ -152,99 +152,175 @@ test("installs skill AGENTS instructions into the target project", async () => {
       skills: ["maintainable-code"]
     });
 
-    assert.deepEqual(result.agentsInstructions, [
-      {
-        skillName: "maintainable-code",
-        path: path.join(destDir, "AGENTS.md")
-      }
-    ]);
+    assert.deepEqual(result.installScripts, []);
 
     const agentsText = await readFile(path.join(destDir, "AGENTS.md"), "utf8");
-    assert.match(agentsText, /# Existing Instructions/);
-    assert.match(agentsText, /<!-- gskills:start maintainable-code -->/);
-    assert.match(agentsText, /## Code Generation/);
-    assert.match(agentsText, /- Follow local style\./);
-    assert.match(agentsText, /<!-- gskills:end maintainable-code -->/);
+    assert.equal(agentsText, "# Existing Instructions\n");
   });
 });
 
-test("replaces existing skill AGENTS block instead of duplicating it", async () => {
+test("runs skill install hook once and removes lifecycle scripts from installed skills", async () => {
   await withTempDir(async (repoDir) => {
     await createSkill({
       repoDir,
-      name: "maintainable-code",
-      description: "Use when testing AGENTS replacement.",
-      resources: ["assets"]
+      name: "hooked-skill",
+      description: "Use when testing install hooks.",
+      resources: []
     });
-
-    const assetPath = path.join(repoDir, "skills", "maintainable-code", "assets", "AGENTS.md");
-    await writeFile(assetPath, "## Code Generation\n\n- First version.\n", "utf8");
-
-    const destDir = path.join(repoDir, "consumer-project");
-    await installSkills({
-      repoDir,
-      destDir,
-      tool: "codex",
-      skills: ["maintainable-code"]
-    });
-
-    await writeFile(assetPath, "## Code Generation\n\n- Updated version.\n", "utf8");
-    await installSkills({
-      repoDir,
-      destDir,
-      tool: "codex",
-      skills: ["maintainable-code"]
-    });
-
-    const agentsText = await readFile(path.join(destDir, "AGENTS.md"), "utf8");
-    assert.equal(agentsText.match(/<!-- gskills:start maintainable-code -->/g).length, 1);
-    assert.doesNotMatch(agentsText, /First version/);
-    assert.match(agentsText, /Updated version/);
-  });
-});
-
-test("collapses duplicate existing skill AGENTS blocks", async () => {
-  await withTempDir(async (repoDir) => {
-    await createSkill({
-      repoDir,
-      name: "maintainable-code",
-      description: "Use when testing duplicate AGENTS cleanup.",
-      resources: ["assets"]
-    });
-
-    const assetPath = path.join(repoDir, "skills", "maintainable-code", "assets", "AGENTS.md");
-    await writeFile(assetPath, "## Code Generation\n\n- Updated version.\n", "utf8");
-
-    const destDir = path.join(repoDir, "consumer-project");
-    await mkdir(destDir, { recursive: true });
+    const hookDir = path.join(repoDir, "skills", "hooked-skill", ".gskills");
+    await mkdir(hookDir, { recursive: true });
     await writeFile(
-      path.join(destDir, "AGENTS.md"),
+      path.join(hookDir, "install.mjs"),
       [
-        "# Existing Instructions",
+        "import path from \"node:path\";",
+        "import { mkdir, writeFile } from \"node:fs/promises\";",
         "",
-        "<!-- gskills:start maintainable-code -->",
-        "- Old version one.",
-        "<!-- gskills:end maintainable-code -->",
-        "",
-        "<!-- gskills:start maintainable-code -->",
-        "- Old version two.",
-        "<!-- gskills:end maintainable-code -->",
-        ""
+        "export async function install(context) {",
+        "  const output = {",
+        "    skillName: context.skillName,",
+        "    tool: context.tool,",
+        "    targetCount: context.targets.length,",
+        "    targets: context.targets",
+        "      .map((target) => ({",
+        "        tool: target.tool,",
+        "        relativePath: target.relativePath,",
+        "        installedPath: path.relative(context.destDir, target.installedPath).replace(/\\\\/g, \"/\")",
+        "      }))",
+        "      .sort((left, right) => left.tool.localeCompare(right.tool))",
+        "  };",
+        "  await mkdir(context.destDir, { recursive: true });",
+        "  await writeFile(path.join(context.destDir, \"hook-context.json\"), `${JSON.stringify(output, null, 2)}\\n`, \"utf8\");",
+        "}"
       ].join("\n"),
       "utf8"
     );
 
-    await installSkills({
+    const destDir = path.join(repoDir, "consumer-project");
+    const result = await installSkills({
       repoDir,
       destDir,
-      tool: "codex",
-      skills: ["maintainable-code"]
+      tool: "all",
+      skills: ["hooked-skill"]
     });
 
+    assert.deepEqual(result.installScripts, [
+      {
+        skillName: "hooked-skill",
+        path: path.join(".gskills", "install.mjs")
+      }
+    ]);
+
+    const hookContext = JSON.parse(await readFile(path.join(destDir, "hook-context.json"), "utf8"));
+    assert.deepEqual(hookContext, {
+      skillName: "hooked-skill",
+      tool: "all",
+      targetCount: 7,
+      targets: [
+        {
+          tool: "claude",
+          relativePath: ".claude/skills",
+          installedPath: ".claude/skills/hooked-skill"
+        },
+        {
+          tool: "codex",
+          relativePath: ".agents/skills",
+          installedPath: ".agents/skills/hooked-skill"
+        },
+        {
+          tool: "cursor",
+          relativePath: ".cursor/skills",
+          installedPath: ".cursor/skills/hooked-skill"
+        },
+        {
+          tool: "gemini",
+          relativePath: ".gemini/skills",
+          installedPath: ".gemini/skills/hooked-skill"
+        },
+        {
+          tool: "opencode",
+          relativePath: ".opencode/skills",
+          installedPath: ".opencode/skills/hooked-skill"
+        },
+        {
+          tool: "trae",
+          relativePath: ".trae/skills",
+          installedPath: ".trae/skills/hooked-skill"
+        },
+        {
+          tool: "windsurf",
+          relativePath: ".windsurf/skills",
+          installedPath: ".windsurf/skills/hooked-skill"
+        }
+      ]
+    });
+
+    for (const entry of result.installed) {
+      await assert.rejects(
+        () => stat(path.join(entry.path, ".gskills")),
+        /ENOENT/
+      );
+    }
+  });
+});
+
+test("rejects install hooks that do not export an install function", async () => {
+  await withTempDir(async (repoDir) => {
+    await createSkill({
+      repoDir,
+      name: "bad-hook",
+      description: "Use when testing invalid install hooks.",
+      resources: []
+    });
+    const hookDir = path.join(repoDir, "skills", "bad-hook", ".gskills");
+    await mkdir(hookDir, { recursive: true });
+    await writeFile(path.join(hookDir, "install.mjs"), "export const noop = true;\n", "utf8");
+
+    const destDir = path.join(repoDir, "consumer-project");
+    await assert.rejects(
+      () => installSkills({
+        repoDir,
+        destDir,
+        tool: "codex",
+        skills: ["bad-hook"]
+      }),
+      /bad-hook: \.gskills\/install\.mjs must export an install\(context\) function\./
+    );
+    await assert.rejects(
+      () => stat(path.join(destDir, ".agents", "skills", "bad-hook", ".gskills")),
+      /ENOENT/
+    );
+  });
+});
+
+test("canonical AGENTS reminders are installed by skill hooks", async () => {
+  await withTempDir(async (destDir) => {
+    const result = await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop", "generate-maintainable-code"]
+    });
+
+    assert.deepEqual(
+      result.installScripts.map((entry) => entry.skillName).sort(),
+      ["code-review-loop", "generate-maintainable-code"]
+    );
+
     const agentsText = await readFile(path.join(destDir, "AGENTS.md"), "utf8");
-    assert.equal(agentsText.match(/<!-- gskills:start maintainable-code -->/g).length, 1);
-    assert.doesNotMatch(agentsText, /Old version one/);
-    assert.doesNotMatch(agentsText, /Old version two/);
-    assert.match(agentsText, /Updated version/);
+    assert.match(agentsText, /<!-- gskills:start code-review-loop -->/);
+    assert.match(agentsText, /## AI Code Review/);
+    assert.match(agentsText, /fix blocking `P0\/P1` findings/);
+    assert.match(agentsText, /<!-- gskills:end code-review-loop -->/);
+    assert.match(agentsText, /<!-- gskills:start generate-maintainable-code -->/);
+    assert.match(agentsText, /## Code Generation/);
+    assert.match(agentsText, /- Inspect nearby files before editing/);
+    assert.match(agentsText, /<!-- gskills:end generate-maintainable-code -->/);
+
+    for (const entry of result.installed) {
+      await assert.rejects(
+        () => stat(path.join(entry.path, ".gskills")),
+        /ENOENT/
+      );
+    }
   });
 });

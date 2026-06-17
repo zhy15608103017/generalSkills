@@ -108,3 +108,9 @@ npm run install-skills -- --aicoding all --dest D:\path\to\project
 ```
 
 The install command replaces generated copies of each selected skill, while leaving unrelated target project files alone.
+
+## Skill Install Hooks
+
+If a skill provides `skills/<skill-name>/.gskills/install.mjs`, `gskills add` runs its exported `install(context)` function after copying the selected skill to the target directory. The hook runs once per skill and receives `skillName`, `skillDir`, `destDir`, the selected `tool`, and all installed target paths.
+
+After installation, `.gskills/` is removed from every installed skill copy so lifecycle code does not add token weight to the final project skill.
