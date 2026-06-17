@@ -75,7 +75,7 @@ ${redactSecrets(verification)}
   return limitText(
     brief,
     Number.isFinite(context.maxBriefBytes) ? context.maxBriefBytes : 600000,
-    "\n\n[代码审核上下文已被 code-review-loop 截断。如需更完整内容，请调大 --max-brief-bytes。]",
+    "\n\n[代码审核上下文已被 code-review-loop 截断。请调大 --max-brief-bytes。]",
   );
 }
 

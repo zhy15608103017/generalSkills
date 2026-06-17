@@ -18,15 +18,18 @@ If the current conversation contains the user request or accepted design, summar
 **CRITICAL: The context file must be self-contained.** The reviewer model cannot see your conversation history. Never write references like "implement #7-#15" or "fix the issues from the list" without including the actual content. Always inline the specific requirements, design decisions, and acceptance criteria so the reviewer can evaluate the work independently.
 
 **Detail requirements:**
-- `--request`: Include the FULL user request with all specific requirements, not just a summary or reference number. If the user listed 9 items, write all 9 items.
+- `--request`: Include the user's original request with all specific requirements, not just a summary or reference number. If the user listed 9 items, write all 9 items.
+- `--corrections`: Include later user corrections, clarifications, and changed expectations in their own section. If none exist, write `无`.
+- `--understanding`: Include the current agent's understanding as something to be audited. Do not write it as unquestioned truth.
+- `--anti-examples`: Include explicit examples of behavior the user rejected or said was wrong. If none exist, write `无`.
 - `--design`: Include key design decisions, architecture choices, trade-offs, and why certain approaches were chosen.
-- `--acceptance`: Include concrete, verifiable acceptance criteria. Each criterion should be a specific, testable statement.
+- `--acceptance`: Include concrete, verifiable acceptance criteria. Each criterion should be a specific, testable statement derived from the original request and corrections.
 - `--non-goals`: Explicitly state what is out of scope to prevent the reviewer from flagging intentional omissions.
 - `--verification`: List the exact commands that should pass to verify the work.
 
 **Before running the review, verify the context file exists and is complete:**
 ```bash
-test -f .ai-review/review-context/current-request.md && echo "EXISTS" || echo "MISSING — create it first"
+test -f .ai-review/review-context/current-request.md && echo "EXISTS" || echo "MISSING - create it first"
 ```
 
 For a new feature, overwrite the current context instead of appending old requirements. Keep `current-design.md` and `current-plan.md` as concise summaries when they are needed; pass large extra docs explicitly with `--doc` only when the review needs them.
@@ -36,7 +39,7 @@ Files generated under `.ai-review/` should use Simplified Chinese for human-read
 Create a structured context file:
 
 ```bash
-node .agents/skills/code-review-loop/scripts/write-review-context.mjs --request "<user request>" --design "<accepted design>" --acceptance "<acceptance criteria>"
+node .agents/skills/code-review-loop/scripts/write-review-context.mjs --request "<user request>" --corrections "<later corrections>" --understanding "<current agent understanding>" --anti-examples "<rejected behavior>" --design "<accepted design>" --acceptance "<acceptance criteria>"
 ```
 
 Use `--out .ai-review/review-context/current-design.md` or `--out .ai-review/review-context/current-plan.md` to write concise design or plan context files.
@@ -57,18 +60,26 @@ node .agents/skills/code-review-loop/scripts/write-review-context.mjs --from-fil
 
 Do not let the reviewer model edit files directly. It must return structured findings. If the verdict is `fail`, fix the blocking findings in the current workspace, run local verification, and review again.
 
+## Requirement Understanding Gate
+
+Every non-dry-run review runs a requirement-understanding audit before code review. The gate uses `references/requirement-auditor-prompt.md` and the same structured result schema.
+
+The gate must pass before code is reviewed. If it returns `fail` or `needs_human`, the script writes `.ai-review/latest-result.json` and `.ai-review/latest-report.md`, skips code review, and exits with the same blocking semantics as a code review failure.
+
+The requirement auditor checks only whether the current agent understanding and acceptance criteria faithfully match the user's original request, later corrections, clarifications, and explicit anti-examples. It must not treat the current understanding as ground truth.
+
 ## Default Flow
 
-1. Create or update `.ai-review/review-context/current-request.md` with the current request, design, non-goals, acceptance criteria, and suggested verification.
+1. Create or update `.ai-review/review-context/current-request.md` with the original request, user corrections, current agent understanding, anti-examples, design, non-goals, acceptance criteria, and suggested verification.
 2. Confirm there are local changes to review with `git status --short`.
 3. Gather review context (auto-collected: diff, changed files, AGENTS.md, verification output, context docs).
-4. Run the bundled review script from the repository root:
+4. Run the bundled review script from the repository root. It first runs the requirement-understanding gate, then runs code review only if the gate passes:
 
 ```bash
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --verify "git diff --check"
 ```
 
-5. Read `.ai-review/latest-result.json` and `.ai-review/latest-report.md`.
+5. Read `.ai-review/latest-result.json` and `.ai-review/latest-report.md`. For the pre-code gate, also inspect `.ai-review/latest-requirement-audit-result.json` and `.ai-review/latest-requirement-audit-brief.md` when needed.
 6. Treat only `P0` and `P1` findings as blocking unless the user says otherwise.
 7. Fix blocking findings yourself, then rerun local verification.
 8. Repeat the review loop up to three times.
@@ -149,6 +160,7 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --checklist docs/revi
 - Provider setup: `references/provider-config.md`
 - Workflow guide: `references/workflow.md`
 - Configuration guide: `references/configuration.md`
+- Requirement auditor prompt: `references/requirement-auditor-prompt.md`
 - Reviewer prompt: `references/reviewer-prompt.md`
 - Output schema: `references/review-result.schema.json`
 - Model list: `references/model-providers.json`

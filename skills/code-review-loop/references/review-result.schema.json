@@ -94,7 +94,7 @@
             "properties": {
               "reviewer": {
                 "type": "string",
-                "enum": ["primary", "second", "unknown"]
+                "enum": ["primary", "second", "requirement-auditor", "unknown"]
               },
               "provider": {
                 "type": "string"

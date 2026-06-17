@@ -1,6 +1,6 @@
 {
   "name": "general-skills",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A lightweight CLI for installing reusable Agent Skills into AI coding tools.",
   "type": "module",
   "license": "MIT",
@@ -20,7 +20,7 @@
     "cli"
   ],
   "bin": {
-    "gskills": "bin/gskills.mjs"
+    "gskills": "./bin/gskills.mjs"
   },
   "files": [
     "bin/",

@@ -137,13 +137,14 @@ function renderSources(sources = []) {
 function reviewerLabel(reviewer) {
   if (reviewer === "primary") return "主审模型";
   if (reviewer === "second") return "二审模型";
+  if (reviewer === "requirement-auditor") return "需求理解审核员";
   return "未知模型";
 }
 
 function normalizeSources(sources = []) {
   return Array.isArray(sources)
     ? sources.map((source) => ({
-      reviewer: source?.reviewer || "unknown",
+        reviewer: source?.reviewer || "unknown",
       provider: source?.provider || "unknown",
       model: source?.model || "unknown",
     }))

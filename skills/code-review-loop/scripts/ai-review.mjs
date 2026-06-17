@@ -20,6 +20,15 @@ import {
   renderHistoryMarkdownEntry,
   withDisplayFields,
 } from "./review-display.mjs";
+import {
+  decorateRequirementAuditBlock,
+  loadRequirementAuditorPrompt,
+  renderRequirementAuditBrief,
+  withRequirementAuditPass,
+  writeRequirementAuditArtifacts,
+} from "./requirement-audit.mjs";
+import { assertRequestContext } from "./request-context.mjs";
+import { renderMarkdownReport } from "./review-report.mjs";
 import { formatReviewRunId } from "./time-format.mjs";
 
 async function main() {
@@ -68,6 +77,27 @@ async function main() {
   const secondResolved = secondReviewOptions
     ? resolveProviderOptions(secondReviewOptions, assets.providersConfig)
     : null;
+  const requirementAudit = await runRequirementAudit({
+    context,
+    outDir,
+    assets,
+    options,
+    primaryResolved,
+  });
+
+  if (requirementAudit.result.verdict !== "pass") {
+    const result = decorateRequirementAuditBlock(requirementAudit.result);
+    const outputMeta = await writeOutputs(outDir, result, requirementAudit.brief, options);
+    await appendHistory(outDir, result, options, context, { primary: primaryResolved, second: null }, outputMeta);
+    process.stdout.write(renderConsoleSummary(result, outDir));
+    if (result.verdict === "fail") {
+      process.exitCode = 2;
+    } else if (result.verdict === "needs_human") {
+      process.exitCode = 3;
+    }
+    return;
+  }
+
   const reviewRun = await runReviewPasses({
     brief,
     assets,
@@ -75,7 +105,7 @@ async function main() {
     primaryResolved,
     secondResolved,
   });
-  const result = reviewRun.result;
+  const result = withRequirementAuditPass(reviewRun.result, requirementAudit.result);
 
   const outputMeta = await writeOutputs(outDir, result, brief, options);
   await appendHistory(outDir, result, options, context, reviewRun.resolved, outputMeta);
@@ -86,6 +116,20 @@ async function main() {
   } else if (result.verdict === "needs_human") {
     process.exitCode = 3;
   }
+}
+
+async function runRequirementAudit({ context, outDir, assets, options, primaryResolved }) {
+  const auditBrief = renderRequirementAuditBrief(context);
+  const auditPrompt = await loadRequirementAuditorPrompt();
+  const result = attachReviewerSource(await callReviewModelWithMalformedRetry({
+    brief: auditBrief,
+    systemPrompt: auditPrompt,
+    schema: assets.schema,
+    options,
+    providersConfig: assets.providersConfig,
+  }), reviewerSource("requirement-auditor", primaryResolved));
+  await writeRequirementAuditArtifacts(outDir, result, auditBrief);
+  return { result, brief: auditBrief };
 }
 
 async function runReviewPasses({ brief, assets, options, primaryResolved, secondResolved }) {
@@ -235,37 +279,6 @@ function readEnv(name) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-async function assertRequestContext(root, options = {}) {
-  const requestPath = options.request || ".ai-review/review-context/current-request.md";
-  const resolved = path.resolve(root, requestPath);
-
-  if (!options.allowOutsideDocs && !isPathInsideOrSame(root, resolved)) {
-    throw new Error(
-      `审核需求上下文必须位于仓库内: ${requestPath}。如确需使用仓库外文件，请显式传入 --allow-outside-docs。`,
-    );
-  }
-
-  let content;
-  try {
-    content = await fs.readFile(resolved, "utf8");
-  } catch {
-    throw new Error(
-      `缺少审核需求上下文: ${requestPath}。请先创建 .ai-review/review-context/current-request.md，或通过 --request 指定非空需求文件。`,
-    );
-  }
-
-  if (!content.trim()) {
-    throw new Error(
-      `审核需求上下文为空: ${requestPath}。请写入本次需求、设计决策、验收标准和非目标后再运行审核。`,
-    );
-  }
-}
-
-function isPathInsideOrSame(root, target) {
-  const relative = path.relative(root, target);
-  return !relative || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 async function callReviewModelWithMalformedRetry(reviewOptions) {
   try {
     return await callReviewModel(reviewOptions);
@@ -403,6 +416,13 @@ function normalizeSources(sources = []) {
     : [];
 }
 
+function renderText(value, fallback) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  return String(value);
+}
+
 async function writeOutputs(outDir, result, brief, options = {}) {
   const outputResult = withDisplayFields(result);
   const report = renderMarkdownReport(outputResult);
@@ -532,78 +552,6 @@ async function pruneRunDirectories(runsDir, keptRunIds, limit) {
     if (keptRunIds.has(entry.name) || fallbackKept.has(entry.name)) return;
     await fs.rm(entry.fullPath, { recursive: true, force: true });
   }));
-}
-
-export function renderMarkdownReport(result) {
-  const blocking = renderFindings(result.blocking_findings);
-  const warnings = renderFindings(result.warnings);
-  const notes = result.verification_notes?.map((note) => `- ${note}`).join("\n") || "- 无";
-
-  return `# AI 代码审核报告
-
-## 审核结论
-
-${formatVerdict(result.verdict)}
-
-## 摘要
-
-${result.summary || "未提供摘要。"}
-
-## 阻塞问题
-
-${blocking || "无"}
-
-## 非阻塞提醒
-
-${warnings || "无"}
-
-## 验证说明
-
-${notes}
-
-## 置信度
-
-${result.confidence}
-`;
-}
-
-function renderFindings(findings = []) {
-  return findings
-    .map((finding) => {
-      const location = renderLocation(finding);
-      return `- [${renderText(finding.severity, "P2")}] ${renderText(finding.title, "未命名问题")}
-  - 来源: ${renderSources(finding)}
-  - 位置: ${location}
-  - 证据: ${renderText(finding.evidence, "未提供证据。")}
-  - 影响: ${renderText(finding.impact, "未说明影响。")}
-  - 建议修复: ${renderText(finding.suggested_fix, "未提供修复建议。")}`;
-    })
-    .join("\n");
-}
-
-function renderLocation(finding) {
-  const file = renderText(finding.file, "未定位");
-  return finding.line ? `${file}:${finding.line}` : file;
-}
-
-function renderSources(finding) {
-  const sources = normalizeSources(finding.sources);
-  if (!sources.length) return "未知";
-  return sources.map(formatSource).join(", ");
-}
-
-function formatSource(source) {
-  const reviewer = source.reviewer === "primary"
-    ? "主审模型"
-    : source.reviewer === "second" ? "二审模型" : "未知模型";
-  return `${reviewer} (${source.provider}/${source.model})`;
-}
-
-function renderText(value, fallback) {
-  if (value === undefined || value === null || value === "") {
-    return fallback;
-  }
-  return String(value);
 }
 
 function renderConsoleSummary(result, outDir) {

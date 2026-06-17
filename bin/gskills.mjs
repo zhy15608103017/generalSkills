@@ -56,6 +56,9 @@ async function main() {
     for (const entry of result.installed) {
       console.log(`Added ${entry.skillName} for ${entry.tool}: ${entry.path}`);
     }
+    for (const entry of result.agentsInstructions) {
+      console.log(`Updated AGENTS.md for ${entry.skillName}: ${entry.path}`);
+    }
     return;
   }
 

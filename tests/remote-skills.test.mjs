@@ -26,6 +26,7 @@ function createMockFetch() {
   const tree = {
     tree: [
       { path: "skills/alpha-skill/SKILL.md", type: "blob" },
+      { path: "skills/alpha-skill/assets/AGENTS.md", type: "blob" },
       { path: "skills/alpha-skill/references/guide.md", type: "blob" },
       { path: "skills/beta-skill/SKILL.md", type: "blob" },
       { path: "README.md", type: "blob" }
@@ -36,6 +37,7 @@ function createMockFetch() {
       "skills/alpha-skill/SKILL.md",
       "---\nname: alpha-skill\ndescription: Use when installing alpha.\n---\n\n# Alpha\n"
     ],
+    ["skills/alpha-skill/assets/AGENTS.md", "## Alpha Instructions\n\n- Use alpha style.\n"],
     ["skills/alpha-skill/references/guide.md", "# Alpha Guide\n"],
     [
       "skills/beta-skill/SKILL.md",
@@ -145,6 +147,11 @@ test("adds multiple remote skills into all tool directories", async () => {
       assert.match(guide, /Alpha Guide/);
       assert.match(beta, /name: beta-skill/);
     }
+
+    const agentsText = await readFile(path.join(destDir, "AGENTS.md"), "utf8");
+    assert.match(agentsText, /<!-- gskills:start alpha-skill -->/);
+    assert.match(agentsText, /## Alpha Instructions/);
+    assert.match(agentsText, /- Use alpha style\./);
   });
 });
 

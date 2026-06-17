@@ -1,10 +1,12 @@
 import path from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 import {
   copyDirectory,
   listSkillDirs,
   parseCliArgs,
+  pathExists,
   resolveToolTargets,
   validateSkillDir,
   writeTargetConfig
@@ -49,7 +51,72 @@ export async function installSkills({
     }
   }
 
-  return { installed };
+  const agentsInstructions = [];
+  for (const skillDir of skillDirs) {
+    const injected = await installAgentsInstructions({ destDir, skillDir });
+    if (injected) {
+      agentsInstructions.push(injected);
+    }
+  }
+
+  return { installed, agentsInstructions };
+}
+
+async function installAgentsInstructions({ destDir, skillDir }) {
+  const sourcePath = path.join(skillDir.path, "assets", "AGENTS.md");
+  if (!(await pathExists(sourcePath))) {
+    return null;
+  }
+
+  const sourceText = await readFile(sourcePath, "utf8");
+  const instructions = sourceText.trim();
+  if (!instructions) {
+    return null;
+  }
+
+  const agentsPath = path.join(destDir, "AGENTS.md");
+  const existingText = (await pathExists(agentsPath)) ? await readFile(agentsPath, "utf8") : "";
+  const updatedText = upsertAgentsBlock(existingText, skillDir.name, instructions);
+
+  await mkdir(path.dirname(agentsPath), { recursive: true });
+  await writeFile(agentsPath, updatedText, "utf8");
+
+  return {
+    skillName: skillDir.name,
+    path: agentsPath
+  };
+}
+
+function upsertAgentsBlock(text, skillName, instructions) {
+  const startMarker = `<!-- gskills:start ${skillName} -->`;
+  const endMarker = `<!-- gskills:end ${skillName} -->`;
+  const block = [startMarker, instructions, endMarker].join("\n");
+  const blockPattern = new RegExp(
+    `${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}`,
+    "g"
+  );
+  let blockFound = false;
+  const replacedText = text.replace(blockPattern, () => {
+    if (blockFound) {
+      return "";
+    }
+    blockFound = true;
+    return block;
+  });
+
+  if (blockFound) {
+    return `${replacedText.trimEnd()}\n`;
+  }
+
+  const existingText = text.trimEnd();
+  if (!existingText) {
+    return `${block}\n`;
+  }
+  return `${existingText}\n\n${block}\n`;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function main() {
@@ -64,6 +131,9 @@ async function main() {
 
   for (const entry of result.installed) {
     console.log(`Installed ${entry.skillName} for ${entry.tool}: ${entry.path}`);
+  }
+  for (const entry of result.agentsInstructions) {
+    console.log(`Updated AGENTS.md for ${entry.skillName}: ${entry.path}`);
   }
   if (result.installed.length === 0) {
     console.log("No skills to install.");
