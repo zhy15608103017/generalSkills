@@ -1,0 +1,3 @@
+display_name: Self-Improving Agent
+short_description: Capture durable project learnings and recurring agent fixes.
+default_prompt: Review or record durable project learnings, non-obvious errors, user corrections, feature requests, and reusable guidance in .learnings.

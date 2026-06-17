@@ -294,16 +294,18 @@ test("rejects install hooks that do not export an install function", async () =>
 
 test("canonical AGENTS reminders are installed by skill hooks", async () => {
   await withTempDir(async (destDir) => {
+    const selfImprovingInstruction =
+      "Use `self-improving-agent` only for durable, future-useful learnings such as user corrections, non-obvious failures, recurring issues, project conventions, or reusable best practices; skip routine noise/secrets/personal data, search `.learnings/` first, and update existing `Pattern-Key`s instead of duplicating.";
     const result = await installSkills({
       repoDir: path.resolve("."),
       destDir,
       tool: "codex",
-      skills: ["code-review-loop", "generate-maintainable-code"]
+      skills: ["code-review-loop", "generate-maintainable-code", "self-improving-agent"]
     });
 
     assert.deepEqual(
       result.installScripts.map((entry) => entry.skillName).sort(),
-      ["code-review-loop", "generate-maintainable-code"]
+      ["code-review-loop", "generate-maintainable-code", "self-improving-agent"]
     );
 
     const agentsText = await readFile(path.join(destDir, "AGENTS.md"), "utf8");
@@ -315,6 +317,25 @@ test("canonical AGENTS reminders are installed by skill hooks", async () => {
     assert.match(agentsText, /## Code Generation/);
     assert.match(agentsText, /- Inspect nearby files before editing/);
     assert.match(agentsText, /<!-- gskills:end generate-maintainable-code -->/);
+    assert.match(agentsText, /<!-- gskills:start self-improving-agent -->/);
+    assert.equal(extractGskillsBlock(agentsText, "self-improving-agent"), selfImprovingInstruction);
+    assert.match(agentsText, /<!-- gskills:end self-improving-agent -->/);
+
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["self-improving-agent"]
+    });
+    const updatedAgentsText = await readFile(path.join(destDir, "AGENTS.md"), "utf8");
+    assert.equal(
+      (updatedAgentsText.match(/<!-- gskills:start self-improving-agent -->/g) || []).length,
+      1
+    );
+    assert.equal(
+      (updatedAgentsText.match(/<!-- gskills:end self-improving-agent -->/g) || []).length,
+      1
+    );
 
     for (const entry of result.installed) {
       await assert.rejects(
@@ -324,3 +345,13 @@ test("canonical AGENTS reminders are installed by skill hooks", async () => {
     }
   });
 });
+
+function extractGskillsBlock(text, skillName) {
+  const startMarker = `<!-- gskills:start ${skillName} -->`;
+  const endMarker = `<!-- gskills:end ${skillName} -->`;
+  const start = text.indexOf(startMarker);
+  const end = text.indexOf(endMarker);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  return text.slice(start + startMarker.length, end).trim();
+}
