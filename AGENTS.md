@@ -25,3 +25,4 @@ This repository stores reusable Agent Skills for coding tools. Keep `skills/` as
 - Run `npm test` after script changes.
 - Run `npm run validate` after skill changes.
 - Keep the tooling dependency-free unless a dependency removes clear maintenance cost.
+
