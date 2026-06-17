@@ -12,14 +12,15 @@ Read the project first, then write the smallest clear change that fits the exist
 ## Workflow
 
 1. Inspect nearby files, imports, tests, package scripts, and existing helpers before editing.
-2. Decide where new code belongs by following the repository's current layout for utilities, API clients, services, constants, enums, and types.
-3. Match naming style from the current file first, then the current module, then the repository's dominant style.
-4. Choose the simplest implementation using language features, standard libraries, and existing project utilities.
-5. Write code in a readable order: validate inputs, prepare data, run core logic, handle logging or telemetry, then return.
-6. Separate pure data transformation from IO, network requests, database work, file access, and global state mutation.
-7. Preserve existing public signatures, return shapes, error codes, and behavior unless the user explicitly requests a breaking change.
-8. Add or update focused tests for behavior, edge cases, expected business errors, and external dependency failures.
-9. Run the relevant validation commands from the project, such as tests, lint, typecheck, or repository-specific scripts.
+2. If the user's proposed implementation is likely incorrect, unsafe, overcomplicated, or inconsistent with the codebase, state the concern, recommend a maintainable alternative, and ask whether to proceed with the original approach before implementing it.
+3. Decide where new code belongs by following the repository's current layout for utilities, API clients, services, constants, enums, and types.
+4. Match naming style from the current file first, then the current module, then the repository's dominant style.
+5. Choose the simplest implementation using language features, standard libraries, and existing project utilities.
+6. Write code in a readable order: validate inputs, prepare data, run core logic, handle logging or telemetry, then return.
+7. Separate pure data transformation from IO, network requests, database work, file access, and global state mutation.
+8. Preserve existing public signatures, return shapes, error codes, and behavior unless the user explicitly requests a breaking change.
+9. Add or update focused tests for behavior, edge cases, expected business errors, and external dependency failures.
+10. Run the relevant validation commands from the project, such as tests, lint, typecheck, or repository-specific scripts.
 
 ## Placement Rules
 
