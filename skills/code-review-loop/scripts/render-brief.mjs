@@ -10,6 +10,7 @@ export function renderReviewBrief(context) {
   const verification = renderVerifications(context.verification);
   const scope = renderScope(context.scope);
   const profile = renderProfile(context.profile);
+  const codegraph = renderCodeGraph(context.codegraphContext);
 
   const brief = `# 代码审核上下文
 
@@ -55,6 +56,8 @@ ${redactSecrets(context.diffStat) || "没有可用的 diff 统计。"}
 
 ${context.changedFiles.map((file) => `- ${file}`).join("\n") || "未检测到变更文件。"}
 
+${codegraph}
+
 ## 变更文件上下文
 
 ${fileBlocks || "未收集到变更文件上下文。"}
@@ -77,6 +80,48 @@ ${redactSecrets(verification)}
     Number.isFinite(context.maxBriefBytes) ? context.maxBriefBytes : 600000,
     "\n\n[代码审核上下文已被 code-review-loop 截断。请调大 --max-brief-bytes。]",
   );
+}
+
+function renderCodeGraph(codegraphContext) {
+  if (!codegraphContext) return "";
+
+  const files = codegraphContext.files?.length
+    ? codegraphContext.files.map((file) => `- ${file}`).join("\n")
+    : "- 无";
+  const affected = codegraphContext.affected
+    ? renderCodeGraphCommandResult("affected", codegraphContext.affected)
+    : "未运行 affected 分析：CodeGraph 未初始化、没有变更文件，或 status 检查失败。";
+
+  return `## CodeGraph 影响分析
+
+命令: ${codegraphContext.command}
+深度: ${codegraphContext.depth}
+
+分析文件:
+${files}
+
+### status
+
+${renderCodeGraphCommandResult("status", codegraphContext.status)}
+
+### affected
+
+${affected}`;
+}
+
+function renderCodeGraphCommandResult(label, result = {}) {
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
+  const fallback = result.timedOut
+    ? `${label} 命令超时。`
+    : `${label} 命令没有输出。`;
+
+  return [
+    `退出码: ${result.exitCode ?? "unknown"}`,
+    "",
+    "```",
+    redactSecrets(limitText(output || fallback, 40000, "\n\n[CodeGraph 输出已截断。]")),
+    "```",
+  ].join("\n");
 }
 
 function renderScope(scope = {}) {

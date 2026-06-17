@@ -72,7 +72,7 @@ The requirement auditor checks only whether the current agent understanding and 
 
 1. Create or update `.ai-review/review-context/current-request.md` with the original request, user corrections, current agent understanding, anti-examples, design, non-goals, acceptance criteria, and suggested verification.
 2. Confirm there are local changes to review with `git status --short`.
-3. Gather review context (auto-collected: diff, changed files, AGENTS.md, verification output, context docs).
+3. Gather review context (auto-collected: diff, changed files, AGENTS.md, verification output, context docs). When CodeGraph is available and the change may have indirect impact, add `--codegraph` to include best-effort affected-test context; do not use it for the requirement-understanding gate.
 4. Run the bundled review script from the repository root. It first runs the requirement-understanding gate, then runs code review only if the gate passes:
 
 ```bash
@@ -109,6 +109,18 @@ Include verification output:
 
 ```bash
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --verify "git diff --check"
+```
+
+Include optional CodeGraph impact context:
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --codegraph --verify "git diff --check"
+```
+
+If using the agent-side CodeGraph MCP instead of the CLI, write a concise `.ai-review/review-context/codegraph.md` with relevant `affected`, `callers`, `callees`, or `impact` findings, then pass it explicitly:
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --doc .ai-review/review-context/codegraph.md --verify "git diff --check"
 ```
 
 Review only a task path:

@@ -69,6 +69,18 @@ pnpm lint
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --verify "git diff --check"
 ```
 
+如果改动触及共享函数、配置入口、CLI 参数、跨模块调用链或测试选择，可启用 CodeGraph 影响分析。该步骤是 best-effort：未安装、未初始化或命令失败时会把失败原因写入 brief，不阻塞审核脚本。
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --codegraph --verify "git diff --check"
+```
+
+如果当前 agent 已通过 CodeGraph MCP 收集了更精准的调用关系，可以手动写入 `.ai-review/review-context/codegraph.md`，再作为额外文档传入。保持内容简短，优先记录 `affected` 测试、关键 `callers/callees` 和 `impact` 结论，不要粘贴完整大段源码。
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --doc .ai-review/review-context/codegraph.md --verify "git diff --check"
+```
+
 限定路径审核：
 
 ```bash
@@ -117,6 +129,12 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile high-accura
 
 ```bash
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --checklist docs/review-checklist.md --verify "git diff --check"
+```
+
+包含 CodeGraph 影响分析：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --codegraph --verify "git diff --check"
 ```
 
 只生成审核上下文，不调用模型：

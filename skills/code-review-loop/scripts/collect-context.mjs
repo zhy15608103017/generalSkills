@@ -1,4 +1,4 @@
-import { execFile, exec } from "node:child_process";
+import { execFile, exec, spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +27,7 @@ export function parseArgs(argv) {
     maxDocBytes: 24000,
     maxFileBytes: 120000,
     maxDiffBytes: 350000,
+    codegraphDepth: 5,
     unknownFlags: [],
   };
 
@@ -71,6 +72,14 @@ export function parseArgs(argv) {
       args.allowEmpty = true;
     } else if (arg === "--verify" && next) {
       args.verifications.push(next);
+      index += 1;
+    } else if (arg === "--codegraph") {
+      args.codegraph = true;
+    } else if (arg === "--codegraph-depth" && next) {
+      args.codegraphDepth = Number(next);
+      index += 1;
+    } else if (arg === "--codegraph-command" && next) {
+      args.codegraphCommand = next;
       index += 1;
     } else if (arg === "--out-dir" && next) {
       args.outDir = next;
@@ -216,6 +225,7 @@ export async function collectReviewContext(options = {}) {
 
   const docs = await readDocs(root, options);
   const fileContexts = await readChangedFileContexts(root, changedFiles, options);
+  const codegraphContext = await collectCodeGraphContext(root, changedFiles, options);
 
   return {
     root,
@@ -230,6 +240,7 @@ export async function collectReviewContext(options = {}) {
     projectRules,
     docs,
     fileContexts,
+    codegraphContext,
     verification,
   };
 }
@@ -458,6 +469,135 @@ async function readChangedFileContexts(root, changedFiles, options) {
 
   await saveFileContextCache(cacheDir, cache);
   return contexts;
+}
+
+async function collectCodeGraphContext(root, changedFiles, options) {
+  if (!options.codegraph) return null;
+
+  const command = options.codegraphCommand || defaultCodeGraphCommand();
+  const depth = Number.isFinite(options.codegraphDepth) ? options.codegraphDepth : 5;
+  const files = changedFiles
+    .filter((file) => !isReviewArtifactPath(file))
+    .filter((file) => !isSecretPath(file));
+
+  const status = await runCodeGraph(command, ["status", "-j", root], root);
+  const statusJson = parseJsonOutput(status.stdout);
+  const hasStatusJson = statusJson && typeof statusJson === "object" && !Array.isArray(statusJson);
+  const initialized = Boolean(status.exitCode === 0 && hasStatusJson && statusJson.initialized !== false);
+  let affected = null;
+
+  if (initialized && files.length > 0) {
+    affected = await runCodeGraph(
+      command,
+      ["affected", "-p", root, "-d", String(depth), "-j", "--", ...files],
+      root,
+    );
+  }
+
+  return {
+    command,
+    depth,
+    files,
+    status,
+    statusJson,
+    initialized,
+    affected,
+  };
+}
+
+function defaultCodeGraphCommand() {
+  return process.platform === "win32" ? "codegraph.cmd" : "codegraph";
+}
+
+async function runCodeGraph(command, args, cwd) {
+  const invocation = buildCodeGraphInvocation(command, args);
+
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    const child = spawn(invocation.command, invocation.args, {
+      cwd,
+      windowsHide: true,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, 30000);
+
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk) => { stdout += chunk; });
+    child.stderr?.on("data", (chunk) => { stderr += chunk; });
+
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        command: invocation.display,
+        exitCode: 1,
+        stdout: stdout.trim(),
+        stderr: String(error.message || error).trim(),
+        timedOut,
+      });
+    });
+
+    child.on("close", (exitCode) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        command: invocation.display,
+        exitCode: timedOut ? 124 : exitCode,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        timedOut,
+      });
+    });
+  });
+}
+
+function buildCodeGraphInvocation(command, args) {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
+    const innerCommandLine = [command, ...args].map(quoteCmdArg).join(" ");
+    const commandLine = `"${innerCommandLine}"`;
+    return {
+      command: process.env.ComSpec || "cmd.exe",
+      args: ["/d", "/s", "/c", commandLine],
+      display: commandLine,
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return {
+    command,
+    args,
+    display: [command, ...args].map(quoteDisplayArg).join(" "),
+    windowsVerbatimArguments: false,
+  };
+}
+
+function quoteCmdArg(value) {
+  const text = String(value).replace(/%/g, "%%");
+  if (!/[\s&()^|<>"]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function quoteDisplayArg(value) {
+  const text = String(value);
+  if (!/\s/.test(text)) return text;
+  return `"${text.replace(/"/g, '\\"')}"`;
+}
+
+function parseJsonOutput(output) {
+  try {
+    return JSON.parse(output);
+  } catch {
+    return null;
+  }
 }
 
 async function loadFileContextCache(cacheDir) {

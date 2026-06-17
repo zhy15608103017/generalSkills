@@ -377,6 +377,22 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --second-review-mode 
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --timeout-ms 180000 --retries 2
 ```
 
+启用 CodeGraph 影响上下文：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --codegraph --codegraph-depth 5
+```
+
+相关参数：
+
+```text
+--codegraph                    启用 best-effort CodeGraph 上下文收集，默认关闭。
+--codegraph-depth <number>     传给 `codegraph affected` 的依赖遍历深度，默认 5。
+--codegraph-command <command>  覆盖 CodeGraph CLI 命令；Windows 默认使用 `codegraph.cmd`。
+```
+
+`--codegraph` 会运行 `codegraph status -j <repo>` 和 `codegraph affected -p <repo> -d <depth> -j -- <changed-files>`，并把输出写入审核 brief 的 `CodeGraph 影响分析` 段落。CodeGraph 未安装、未初始化或命令失败时，脚本记录失败原因并继续审核。
+
 ## 推荐配置策略
 
 常规开发：
