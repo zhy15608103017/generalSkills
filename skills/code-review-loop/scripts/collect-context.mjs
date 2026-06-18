@@ -123,6 +123,18 @@ export function parseArgs(argv) {
     } else if (arg === "--second-review-mode" && next) {
       args.secondReviewMode = next;
       index += 1;
+    } else if (arg === "--second-timeout-ms" && next) {
+      args.secondTimeoutMs = Number(next);
+      args.explicitOptions.secondTimeoutMs = true;
+      index += 1;
+    } else if (arg === "--second-retries" && next) {
+      args.secondRetries = Number(next);
+      args.explicitOptions.secondRetries = true;
+      index += 1;
+    } else if (arg === "--second-confidence-threshold" && next) {
+      args.secondConfidenceThreshold = Number(next);
+      args.explicitOptions.secondConfidenceThreshold = true;
+      index += 1;
     } else if (arg === "--second-p0-threshold" && next) {
       args.secondP0Threshold = Number(next);
       index += 1;

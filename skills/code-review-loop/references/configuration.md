@@ -62,18 +62,23 @@ AI_REVIEW_SECOND_REVIEW_MODE=auto
 AI_REVIEW_SECOND_P0_THRESHOLD=1
 AI_REVIEW_SECOND_P1_THRESHOLD=1
 AI_REVIEW_SECOND_P2_THRESHOLD=3
+AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD=0.8
+AI_REVIEW_SECOND_TIMEOUT_MS=60000
+AI_REVIEW_SECOND_RETRIES=0
 
 AI_REVIEW_TIMEOUT_MS=180000
 AI_REVIEW_RETRIES=2
 ```
 
-审核顺序：
+审核方式：
 
 ```text
-PRIMARY 先审核
-SECOND  后审核
-最终结果合并
+always: PRIMARY 和 SECOND 并行审核
+auto:    PRIMARY 先审核，达到触发条件后 SECOND 后审核
+off:     只运行 PRIMARY
+当 PRIMARY 和 SECOND 都成功时，最终结果合并
 任意模型发现 P0/P1 都会阻塞
+任意一个审核模型失败或超时时，会降级使用已成功模型的结果，并在 verification_notes 和报告中记录原因
 ```
 
 第二模型配置存在条件：
@@ -107,7 +112,19 @@ off     完全关闭第二轮审核，即使配置了第二模型也不会运行
 AI_REVIEW_SECOND_P0_THRESHOLD=1
 AI_REVIEW_SECOND_P1_THRESHOLD=1
 AI_REVIEW_SECOND_P2_THRESHOLD=3
+AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD=0.8
 ```
+
+`auto` 模式下，主模型返回的 P0/P1/P2 数量达到阈值，或主审 `confidence` 小于 `AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD`，都会触发二审。默认置信度阈值是 `0.8`。
+
+二审模型使用独立的默认请求预算：
+
+```env
+AI_REVIEW_SECOND_TIMEOUT_MS=60000
+AI_REVIEW_SECOND_RETRIES=0
+```
+
+如果设置了 `--second-timeout-ms` / `AI_REVIEW_SECOND_TIMEOUT_MS` 或 `--second-retries` / `AI_REVIEW_SECOND_RETRIES`，会覆盖二审默认值。通用 `--timeout-ms` 和 `--retries` 仍用于主审。
 
 优先级：
 
@@ -119,7 +136,7 @@ off > always > auto 条件判断
 
 - `off`: 第二模型永远不运行。
 - `always`: 第二模型配置存在且凭证可用时一定运行，不看主模型 finding 数量。
-- `auto`: 第二模型配置存在、凭证可用，并且主模型 finding 数量达到阈值时才运行。
+- `auto`: 第二模型配置存在、凭证可用，并且主模型 finding 数量达到阈值或 `confidence` 低于阈值时才运行。
 
 ## 主模型变量
 
@@ -164,6 +181,9 @@ AI_REVIEW_SECOND_REVIEW_MODE   第二模型运行模式：always、auto、off
 AI_REVIEW_SECOND_P0_THRESHOLD  auto 模式下 P0 触发阈值，默认 1
 AI_REVIEW_SECOND_P1_THRESHOLD  auto 模式下 P1 触发阈值，默认 1
 AI_REVIEW_SECOND_P2_THRESHOLD  auto 模式下 P2 触发阈值，默认 3
+AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD auto 模式主模型低置信度触发阈值，默认 0.8
+AI_REVIEW_SECOND_TIMEOUT_MS    第二模型单次请求超时时间，默认 60000
+AI_REVIEW_SECOND_RETRIES       第二模型请求重试次数，默认 0
 ```
 
 第二模型会隔离主模型环境变量，不会误用 `AI_REVIEW_PRIMARY_BASE_URL`、`AI_REVIEW_PRIMARY_API_KEY`、`AI_REVIEW_TRANSPORT` 或 `AI_REVIEW_API_STYLE`。
@@ -377,6 +397,12 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --second-review-mode 
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --timeout-ms 180000 --retries 2
 ```
 
+覆盖二审的独立超时、重试和 auto 置信度阈值：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --second-timeout-ms 60000 --second-retries 0 --second-confidence-threshold 0.8
+```
+
 启用 CodeGraph 影响上下文：
 
 ```bash
@@ -475,13 +501,14 @@ AI_REVIEW_PRIMARY_BASE_URL=<url>
 AI_REVIEW_SECOND_REVIEW_MODE=off
 ```
 
-如果是 `auto` 模式，只有主模型 finding 数量达到阈值时才会运行第二模型：
+如果是 `auto` 模式，只有主模型 finding 数量达到阈值，或主审 `confidence` 低于阈值时，才会运行第二模型：
 
 ```env
 AI_REVIEW_SECOND_REVIEW_MODE=auto
 AI_REVIEW_SECOND_P0_THRESHOLD=1
 AI_REVIEW_SECOND_P1_THRESHOLD=1
 AI_REVIEW_SECOND_P2_THRESHOLD=3
+AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD=0.8
 ```
 
 再确认至少设置了一个第二模型路由变量：

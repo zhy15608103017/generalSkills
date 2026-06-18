@@ -132,30 +132,167 @@ async function runRequirementAudit({ context, outDir, assets, options, primaryRe
   return { result, brief: auditBrief };
 }
 
-async function runReviewPasses({ brief, assets, options, primaryResolved, secondResolved }) {
-  const primaryResult = attachReviewerSource(await callReviewModelWithMalformedRetry({
+export async function runReviewPasses({
+  brief,
+  assets,
+  options,
+  primaryResolved,
+  secondResolved,
+  callReviewModelFn = callReviewModel,
+}) {
+  const secondOptions = resolveSecondReviewOptions(options, assets.providersConfig);
+  const secondReviewMode = resolveSecondReviewMode(options);
+  const primaryReview = () => runSingleReview({
+    brief,
+    assets,
+    options,
+    resolved: primaryResolved,
+    reviewer: "primary",
+    callReviewModelFn,
+  });
+  const secondReview = () => runSingleReview({
+    brief,
+    assets,
+    options: secondOptions,
+    resolved: secondResolved,
+    reviewer: "second",
+    callReviewModelFn,
+  });
+
+  if (secondOptions && secondReviewMode === "always") {
+    const [primaryOutcome, secondOutcome] = await Promise.all([
+      settleReview(primaryReview()),
+      settleReview(secondReview()),
+    ]);
+    return combineReviewOutcomes({
+      primaryOutcome,
+      secondOutcome,
+      primaryResolved,
+      secondResolved,
+      secondReviewMode,
+    });
+  }
+
+  const primaryOutcome = await settleReview(primaryReview());
+  if (!primaryOutcome.ok) {
+    if (secondOptions && secondReviewMode !== "off") {
+      const secondOutcome = await settleReview(secondReview());
+      return combineReviewOutcomes({
+        primaryOutcome,
+        secondOutcome,
+        primaryResolved,
+        secondResolved,
+        secondReviewMode,
+      });
+    }
+    throw primaryOutcome.error;
+  }
+
+  const primaryResult = primaryOutcome.result;
+  const primaryRun = { result: primaryResult, resolved: { primary: primaryResolved, second: null } };
+  if (!secondOptions) return primaryRun;
+  if (!shouldRunSecondReview(primaryResult, options)) {
+    return {
+      result: withReviewNotes(primaryResult, [
+        secondReviewNote(secondResolved, secondReviewMode),
+        "检测到二审配置，但 auto 模式未达到触发条件，未运行二审模型。",
+      ]),
+      resolved: { primary: primaryResolved, second: null },
+    };
+  }
+
+  const secondOutcome = await settleReview(secondReview());
+  return combineReviewOutcomes({
+    primaryOutcome,
+    secondOutcome,
+    primaryResolved,
+    secondResolved,
+    secondReviewMode,
+  });
+}
+
+async function runSingleReview({ brief, assets, options, resolved, reviewer, callReviewModelFn }) {
+  return attachReviewerSource(await callReviewModelWithMalformedRetry({
     brief,
     systemPrompt: assets.systemPrompt,
     schema: assets.schema,
     options,
     providersConfig: assets.providersConfig,
-  }), reviewerSource("primary", primaryResolved));
-  const secondOptions = resolveSecondReviewOptions(options, assets.providersConfig);
-  const primaryRun = { result: primaryResult, resolved: { primary: primaryResolved, second: null } };
-  if (!secondOptions) return primaryRun;
-  if (!shouldRunSecondReview(primaryResult, options)) return primaryRun;
+  }, callReviewModelFn), reviewerSource(reviewer, resolved));
+}
 
-  const secondaryResult = attachReviewerSource(await callReviewModelWithMalformedRetry({
-    brief,
-    systemPrompt: assets.systemPrompt,
-    schema: assets.schema,
-    options: secondOptions,
-    providersConfig: assets.providersConfig,
-  }), reviewerSource("second", secondResolved));
+async function settleReview(promise) {
+  try {
+    return { ok: true, result: await promise };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+function combineReviewOutcomes({
+  primaryOutcome,
+  secondOutcome,
+  primaryResolved,
+  secondResolved,
+  secondReviewMode,
+}) {
+  const detectedNote = secondReviewNote(secondResolved, secondReviewMode);
+  if (primaryOutcome.ok && secondOutcome.ok) {
+    return {
+      result: withReviewNotes(mergeReviewResults(primaryOutcome.result, secondOutcome.result), [detectedNote]),
+      resolved: { primary: primaryResolved, second: secondResolved },
+    };
+  }
+  if (primaryOutcome.ok) {
+    return {
+      result: withReviewNotes(primaryOutcome.result, [
+        detectedNote,
+        `二审模型失败，已降级使用主审模型结果。原因: ${errorMessage(secondOutcome.error)}`,
+      ]),
+      resolved: { primary: primaryResolved, second: secondResolved },
+    };
+  }
+  if (secondOutcome.ok) {
+    return {
+      result: withReviewNotes(secondOutcome.result, [
+        detectedNote,
+        `主审模型失败，已降级使用二审模型结果。原因: ${errorMessage(primaryOutcome.error)}`,
+      ]),
+      resolved: { primary: primaryResolved, second: secondResolved },
+    };
+  }
+
   return {
-    result: mergeReviewResults(primaryResult, secondaryResult),
+    result: {
+      verdict: "needs_human",
+      summary: "主审模型和二审模型都未返回可用审核结果，需要人工确认。",
+      blocking_findings: [],
+      warnings: [],
+      verification_notes: [
+        detectedNote,
+        `主审模型失败: ${errorMessage(primaryOutcome.error)}`,
+        `二审模型失败: ${errorMessage(secondOutcome.error)}`,
+      ],
+      confidence: 0,
+    },
     resolved: { primary: primaryResolved, second: secondResolved },
   };
+}
+
+function withReviewNotes(result, notes = []) {
+  const existing = result.verification_notes || [];
+  return {
+    ...result,
+    verification_notes: [...notes.filter(Boolean), ...existing],
+  };
+}
+
+function secondReviewNote(resolved, mode) {
+  return `检测到二审模型配置: ${resolved?.provider || "unknown"}/${resolved?.model || "unknown"}，模式: ${mode}。`;
+}
+
+function errorMessage(error) {
+  return String(error?.message || error || "unknown error");
 }
 
 export function buildSecondReviewOptions(options, providersConfig) {
@@ -182,6 +319,8 @@ export function buildSecondReviewOptions(options, providersConfig) {
     ...options,
     usePrimaryEnv: false,
     secondReviewMode,
+    timeoutMs: positiveNumber(options.secondTimeoutMs, readEnv("AI_REVIEW_SECOND_TIMEOUT_MS"), 60000),
+    retries: nonNegativeInteger(options.secondRetries, readEnv("AI_REVIEW_SECOND_RETRIES"), 0),
     provider: secondConfig.provider || (secondConfig.model ? undefined : options.provider),
     model: secondConfig.model || options.model,
     baseUrl: secondConfig.baseUrl || options.baseUrl,
@@ -202,7 +341,7 @@ export function shouldRunSecondReview(primaryResult, options = {}) {
   const secondReviewMode = resolveSecondReviewMode(options);
   if (secondReviewMode === "off") return false;
   if (secondReviewMode === "always") return true;
-  return meetsSecondReviewThreshold(primaryResult, options);
+  return meetsSecondReviewThreshold(primaryResult, options) || isBelowSecondReviewConfidenceThreshold(primaryResult, options);
 }
 
 function resolveSecondReviewMode(options = {}) {
@@ -258,12 +397,50 @@ function resolveSecondReviewThresholds(options = {}) {
   };
 }
 
+function isBelowSecondReviewConfidenceThreshold(result, options = {}) {
+  const confidence = Number(result?.confidence);
+  return Number.isFinite(confidence) && confidence < resolveSecondReviewConfidenceThreshold(options);
+}
+
+function resolveSecondReviewConfidenceThreshold(options = {}) {
+  return numberInRange(
+    options.secondConfidenceThreshold,
+    readEnv("AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD"),
+    0.8,
+  );
+}
+
 function positiveInteger(...values) {
   for (const value of values) {
     const parsed = Number(value);
     if (Number.isInteger(parsed) && parsed >= 1) return parsed;
   }
   return 1;
+}
+
+function nonNegativeInteger(...values) {
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isInteger(parsed) && parsed >= 0) return parsed;
+  }
+  return 0;
+}
+
+function positiveNumber(...values) {
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 1;
+}
+
+function numberInRange(...values) {
+  const fallback = values[values.length - 1];
+  for (const value of values.slice(0, -1)) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) return parsed;
+  }
+  return fallback;
 }
 
 function normalizeSecondReviewMode(value) {
@@ -279,14 +456,14 @@ function readEnv(name) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-async function callReviewModelWithMalformedRetry(reviewOptions) {
+async function callReviewModelWithMalformedRetry(reviewOptions, callReviewModelFn = callReviewModel) {
   try {
-    return await callReviewModel(reviewOptions);
+    return await callReviewModelFn(reviewOptions);
   } catch (error) {
     if (!isMalformedReviewerOutput(error)) {
       throw error;
     }
-    return callReviewModel(reviewOptions);
+    return callReviewModelFn(reviewOptions);
   }
 }
 
