@@ -346,6 +346,63 @@ test("canonical AGENTS reminders are installed by skill hooks", async () => {
   });
 });
 
+test("code-review-loop install hook appends .ai-review to existing gitignore", async () => {
+  await withTempDir(async (destDir) => {
+    await writeFile(path.join(destDir, ".gitignore"), "node_modules/\n.env\n", "utf8");
+
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const gitignoreText = await readFile(path.join(destDir, ".gitignore"), "utf8");
+    assert.equal(gitignoreText, "node_modules/\n.env\n.ai-review\n");
+
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const updatedGitignoreText = await readFile(path.join(destDir, ".gitignore"), "utf8");
+    assert.equal(updatedGitignoreText, "node_modules/\n.env\n.ai-review\n");
+  });
+});
+
+test("code-review-loop install hook creates gitignore when missing", async () => {
+  await withTempDir(async (destDir) => {
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const gitignoreText = await readFile(path.join(destDir, ".gitignore"), "utf8");
+    assert.equal(gitignoreText, ".ai-review\n");
+  });
+});
+
+test("code-review-loop install hook preserves existing gitignore formatting", async () => {
+  await withTempDir(async (destDir) => {
+    const existingGitignore = "# comments stay\n\nbuild/\n temp-cache \n";
+    await writeFile(path.join(destDir, ".gitignore"), existingGitignore, "utf8");
+
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const gitignoreText = await readFile(path.join(destDir, ".gitignore"), "utf8");
+    assert.equal(gitignoreText, `${existingGitignore}.ai-review\n`);
+  });
+});
+
 function extractGskillsBlock(text, skillName) {
   const startMarker = `<!-- gskills:start ${skillName} -->`;
   const endMarker = `<!-- gskills:end ${skillName} -->`;
