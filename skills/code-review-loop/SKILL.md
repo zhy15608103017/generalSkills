@@ -129,6 +129,15 @@ Review only a task path:
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --path src --verify "git diff --check"
 ```
 
+Exclude files from review with a repository-root `.ai-reviewignore` file. It uses `.gitignore`-style patterns and removes matching files from `changedFiles`, diff collection, file context collection, untracked pseudo-diff generation, and CodeGraph changed-file input:
+
+```gitignore
+dist/
+*.snap
+src/generated/**
+!src/generated/keep-me.js
+```
+
 Review staged changes before committing:
 
 ```bash

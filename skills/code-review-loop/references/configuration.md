@@ -466,6 +466,27 @@ AI_REVIEW_API_STYLE=chat
 - 审核上下文过大时，优先用 `--path` 缩小范围，而不是盲目增大限制。
 - 高风险改动建议启用双模型和 `--profile high-accuracy`。
 
+## `.ai-reviewignore`
+
+可以在仓库根目录创建 `.ai-reviewignore` 来排除部分文件不参与 review。
+
+```gitignore
+dist/
+*.snap
+src/generated/**
+!src/generated/keep-me.js
+```
+
+该文件的规则接近 `.gitignore`，生效范围包括：
+
+- `changedFiles`
+- Git diff / diff stat
+- 变更文件上下文收集
+- untracked 文件的伪 diff
+- CodeGraph 的变更文件输入
+
+如果只是临时缩小本次 review 范围，而不是维护长期排除规则，仍然优先使用 `--path` / `--paths`。
+
 ## 故障排查
 
 ### Missing API key

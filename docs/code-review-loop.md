@@ -23,7 +23,7 @@ node skills/code-review-loop/scripts/ai-review.mjs --profile auto --verify "git 
 ```text
 skills/code-review-loop/
   SKILL.md                         skill 主说明和强制流程
-  .gskills/install.mjs             安装钩子，写入 AGENTS.md 并把 .ai-review 加入 .gitignore
+  .gskills/install.mjs             安装钩子，写入 AGENTS.md、创建 .ai-reviewignore，并把 .ai-review / .ai-reviewignore 加入 .gitignore
   agents/openai.yaml               agent 元数据
   references/
     configuration.md               配置说明
@@ -361,7 +361,7 @@ YYYY-MM-DD_hh-mm-ss
 
 默认保留最近 5 条 history/run 记录，可通过 `--history-limit` 或 `AI_REVIEW_HISTORY_LIMIT` 调整。设置为 `0` 时不保留历史运行目录和索引条目。
 
-`.gskills/install.mjs` 会把 `.ai-review` 加入消费项目 `.gitignore`，因为这些文件可能包含本地代码上下文、验证输出和模型元数据。
+`.gskills/install.mjs` 会在消费项目根目录创建空的 `.ai-reviewignore`，并把 `.ai-review`、`.ai-reviewignore` 加入消费项目 `.gitignore`。这样 review 产物不会被误提交，后续也可以直接维护持久的 review 排除规则。
 
 ## 审核结果结构
 

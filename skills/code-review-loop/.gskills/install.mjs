@@ -7,10 +7,13 @@ const INSTRUCTIONS = [
   "For feature, bug fix, refactor, or other local code changes, use the `code-review-loop` skill before reporting completion. Create `.ai-review/review-context/current-request.md`, run verification and the review loop, fix blocking `P0/P1` findings, and clearly report any review setup failure."
 ].join("\n");
 const REVIEW_IGNORE_ENTRY = ".ai-review";
+const REVIEW_SCOPE_IGNORE_ENTRY = ".ai-reviewignore";
 
 export async function install(context) {
   await upsertAgentsBlock(context.destDir, context.skillName, INSTRUCTIONS);
   await ensureGitignoreEntry(context.destDir, REVIEW_IGNORE_ENTRY);
+  await ensureGitignoreEntry(context.destDir, REVIEW_SCOPE_IGNORE_ENTRY);
+  await ensureReviewIgnoreFile(context.destDir);
 }
 
 async function upsertAgentsBlock(destDir, skillName, instructions) {
@@ -38,6 +41,15 @@ async function ensureGitignoreEntry(destDir, entry) {
 
   await mkdir(path.dirname(gitignorePath), { recursive: true });
   await writeFile(gitignorePath, updatedText, "utf8");
+}
+
+async function ensureReviewIgnoreFile(destDir) {
+  const reviewIgnorePath = path.join(destDir, REVIEW_SCOPE_IGNORE_ENTRY);
+  const existingText = await readTextIfExists(reviewIgnorePath);
+  if (existingText !== "") return;
+
+  await mkdir(path.dirname(reviewIgnorePath), { recursive: true });
+  await writeFile(reviewIgnorePath, "", "utf8");
 }
 
 function upsertBlock(text, skillName, instructions) {

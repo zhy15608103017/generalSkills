@@ -205,15 +205,19 @@ function splitPathList(value = "") {
 export async function collectReviewContext(options = {}) {
   const root = await getGitRoot();
   const scope = resolveReviewScope(root, options);
-  const [untrackedFiles, rawDiff, verification] = await Promise.all([
+  const reviewIgnore = await loadReviewIgnore(root);
+  const [trackedChangedFilesRaw, untrackedFilesRaw, verification] = await Promise.all([
+    trackedChangedFileNames(root, scope),
     untrackedFileNames(root, scope),
-    rawGitDiff(root, scope),
     runVerifications(root, options.verifications),
   ]);
-  const changedFiles = await changedFileNames(root, scope, untrackedFiles);
+  const trackedChangedFiles = filterReviewIgnoredFiles(trackedChangedFilesRaw, reviewIgnore);
+  const untrackedFiles = filterReviewIgnoredFiles(untrackedFilesRaw, reviewIgnore);
+  const changedFiles = mergeFileLists(trackedChangedFiles, untrackedFiles);
   const untrackedSizeBytes = await totalFileSizeBytes(root, untrackedFiles);
   const profileMaxFileBytes = options.maxFileBytes;
   const profileUntrackedDiff = await renderUntrackedDiff(root, untrackedFiles, profileMaxFileBytes);
+  const rawDiff = await rawGitDiff(root, scope, trackedChangedFiles);
   const combinedDiffForProfile = [rawDiff, profileUntrackedDiff].filter(Boolean).join("\n\n");
   const profile = resolveReviewProfile({
     changedFiles,
@@ -227,10 +231,12 @@ export async function collectReviewContext(options = {}) {
     ? profileUntrackedDiff
     : await renderUntrackedDiff(root, untrackedFiles, options.maxFileBytes);
   const finalCombinedDiff = [rawDiff, untrackedDiff].filter(Boolean).join("\n\n");
+  const changedPathspec = toPathspec(changedFiles);
+  const trackedChangedPathspec = toPathspec(trackedChangedFiles);
 
   const [status, diffStat, projectRules] = await Promise.all([
-    git(["status", "--short", ...scope.pathspec], root),
-    git([...scope.diffCommand, "--stat", ...scope.pathspec], root),
+    scopedGitStatus(root, changedPathspec),
+    scopedGitDiffStat(root, scope, trackedChangedPathspec),
     readIfExists(path.join(root, "AGENTS.md")),
   ]);
   const diff = limitGitDiff(finalCombinedDiff, options.maxDiffBytes);
@@ -319,22 +325,17 @@ async function git(args, cwd) {
   }
 }
 
-async function rawGitDiff(root, scope) {
-  return git([...scope.diffCommand, ...scope.pathspec], root);
-}
-
 function limitGitDiff(diff, maxBytes = 350000) {
   return limitText(redactSecrets(diff), maxBytes, "\n\n[Diff 已被 code-review-loop 截断。如需更完整内容，请调大 --max-diff-bytes。]");
 }
 
-async function changedFileNames(root, scope, precomputedUntracked) {
+async function trackedChangedFileNames(root, scope) {
   const trackedCommand = scope.staged
     ? ["diff", "--name-only", "--cached", ...scope.pathspec]
     : ["diff", "--name-only", scope.base, ...scope.pathspec];
-  const untrackedList = precomputedUntracked || await untrackedFileNames(root, scope);
   const trackedOutput = await git(trackedCommand, root);
 
-  return `${trackedOutput}\n${untrackedList.join("\n")}`
+  return trackedOutput
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith("warning:"))
@@ -364,6 +365,33 @@ async function renderUntrackedDiff(root, untrackedFiles, maxFileBytes) {
     if (content) blocks.push(renderAddedFileDiff(file, redactSecrets(content)));
   }
   return blocks.join("\n\n");
+}
+
+function mergeFileLists(...lists) {
+  return lists
+    .flatMap((files) => files || [])
+    .filter((file, index, files) => file && files.indexOf(file) === index);
+}
+
+function toPathspec(files = []) {
+  if (!files.length) return [];
+  return ["--", ...files];
+}
+
+async function scopedGitStatus(root, pathspec) {
+  if (!pathspec.length) return "";
+  return git(["status", "--short", ...pathspec], root);
+}
+
+async function scopedGitDiffStat(root, scope, pathspec) {
+  if (!pathspec.length) return "";
+  return git([...scope.diffCommand, "--stat", ...pathspec], root);
+}
+
+async function rawGitDiff(root, scope, files) {
+  const pathspec = toPathspec(files);
+  if (!pathspec.length) return "";
+  return git([...scope.diffCommand, ...pathspec], root);
 }
 
 async function totalFileSizeBytes(root, files) {
@@ -481,6 +509,127 @@ async function readChangedFileContexts(root, changedFiles, options) {
 
   await saveFileContextCache(cacheDir, cache);
   return contexts;
+}
+
+async function loadReviewIgnore(root) {
+  const ignorePath = path.join(root, ".ai-reviewignore");
+  const content = await readIfExists(ignorePath);
+  if (!content.trim()) return [];
+  return content
+    .split(/\r?\n/)
+    .map(parseReviewIgnoreRule)
+    .filter(Boolean);
+}
+
+function parseReviewIgnoreRule(line) {
+  let pattern = String(line || "").trim();
+  if (!pattern) return null;
+  const escapedLeading = pattern.startsWith("\\#") || pattern.startsWith("\\!");
+  if (escapedLeading) {
+    pattern = pattern.slice(1);
+  } else if (pattern.startsWith("#")) {
+    return null;
+  }
+
+  let negated = false;
+  if (!escapedLeading && pattern.startsWith("!")) {
+    negated = true;
+    pattern = pattern.slice(1).trim();
+  }
+
+  if (!pattern) return null;
+  const directoryOnly = pattern.endsWith("/");
+  const normalizedPattern = normalizeIgnorePattern(pattern.replace(/\/+$/, ""));
+  if (!normalizedPattern) return null;
+
+  return {
+    negated,
+    matcher: compileReviewIgnorePattern(normalizedPattern, { directoryOnly }),
+  };
+}
+
+function normalizeIgnorePattern(pattern) {
+  return String(pattern || "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/\/+/g, "/");
+}
+
+function compileReviewIgnorePattern(pattern, { directoryOnly = false } = {}) {
+  const anchored = pattern.startsWith("/");
+  const unanchoredPattern = anchored ? pattern.slice(1) : pattern;
+  const hasSlash = unanchoredPattern.includes("/");
+
+  if (!hasSlash) {
+    const basenameRegex = globToRegexSource(unanchoredPattern);
+    if (anchored) {
+      if (directoryOnly) {
+        return new RegExp(`^${basenameRegex}(?:/.*)?$`);
+      }
+      return new RegExp(`^${basenameRegex}(?:$|/.*)`);
+    }
+    if (directoryOnly) {
+      return new RegExp(`(?:^|/)${basenameRegex}(?:/.*)?$`);
+    }
+    return new RegExp(`(?:^|/)${basenameRegex}(?:$|/.*)`);
+  }
+
+  const body = globToRegexSource(unanchoredPattern);
+  if (directoryOnly) {
+    return new RegExp(`^${body}(?:/.*)?$`);
+  }
+  return new RegExp(`^${body}(?:$|/.*)`);
+}
+
+function globToRegexSource(pattern) {
+  let source = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    const next = pattern[index + 1];
+
+    if (char === "*") {
+      if (next === "*") {
+        const afterNext = pattern[index + 2];
+        if (afterNext === "/") {
+          source += "(?:.*/)?";
+          index += 2;
+        } else {
+          source += ".*";
+          index += 1;
+        }
+      } else {
+        source += "[^/]*";
+      }
+      continue;
+    }
+
+    if (char === "?") {
+      source += "[^/]";
+      continue;
+    }
+
+    source += escapeRegexChar(char);
+  }
+  return source;
+}
+
+function escapeRegexChar(char) {
+  return /[\\^$+?.()|[\]{}]/.test(char) ? `\\${char}` : char;
+}
+
+function filterReviewIgnoredFiles(files, rules) {
+  if (!rules.length) return files;
+  return files.filter((filePath) => !isReviewIgnored(filePath, rules));
+}
+
+function isReviewIgnored(filePath, rules) {
+  const normalizedPath = String(filePath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  let ignored = false;
+  for (const rule of rules) {
+    if (!rule.matcher.test(normalizedPath)) continue;
+    ignored = !rule.negated;
+  }
+  return ignored;
 }
 
 async function collectCodeGraphContext(root, changedFiles, options) {

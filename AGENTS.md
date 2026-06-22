@@ -1,5 +1,10 @@
 # Repository Agent Instructions
 
+## 超能力技能覆盖
+
+- 不要在这个项目中使用或遵循 `superpowers:test-driven-development`，即使对于错误修复或功能工作也是如此。
+- 调试或改变行为时，仍要调查根本原因并运行适当的验证，但不要在生产代码更改前要求失败的测试。
+
 ## Purpose
 
 This repository stores reusable Agent Skills for coding tools. Keep `skills/` as the canonical source and use scripts to generate tool-specific copies.

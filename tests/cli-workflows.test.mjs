@@ -358,7 +358,7 @@ test("code-review-loop install hook appends .ai-review to existing gitignore", a
     });
 
     const gitignoreText = await readFile(path.join(destDir, ".gitignore"), "utf8");
-    assert.equal(gitignoreText, "node_modules/\n.env\n.ai-review\n");
+    assert.equal(gitignoreText, "node_modules/\n.env\n.ai-review\n.ai-reviewignore\n");
 
     await installSkills({
       repoDir: path.resolve("."),
@@ -368,7 +368,7 @@ test("code-review-loop install hook appends .ai-review to existing gitignore", a
     });
 
     const updatedGitignoreText = await readFile(path.join(destDir, ".gitignore"), "utf8");
-    assert.equal(updatedGitignoreText, "node_modules/\n.env\n.ai-review\n");
+    assert.equal(updatedGitignoreText, "node_modules/\n.env\n.ai-review\n.ai-reviewignore\n");
   });
 });
 
@@ -382,7 +382,7 @@ test("code-review-loop install hook creates gitignore when missing", async () =>
     });
 
     const gitignoreText = await readFile(path.join(destDir, ".gitignore"), "utf8");
-    assert.equal(gitignoreText, ".ai-review\n");
+    assert.equal(gitignoreText, ".ai-review\n.ai-reviewignore\n");
   });
 });
 
@@ -399,7 +399,38 @@ test("code-review-loop install hook preserves existing gitignore formatting", as
     });
 
     const gitignoreText = await readFile(path.join(destDir, ".gitignore"), "utf8");
-    assert.equal(gitignoreText, `${existingGitignore}.ai-review\n`);
+    assert.equal(gitignoreText, `${existingGitignore}.ai-review\n.ai-reviewignore\n`);
+  });
+});
+
+test("code-review-loop install hook creates empty .ai-reviewignore when missing", async () => {
+  await withTempDir(async (destDir) => {
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const reviewIgnoreText = await readFile(path.join(destDir, ".ai-reviewignore"), "utf8");
+    assert.equal(reviewIgnoreText, "");
+  });
+});
+
+test("code-review-loop install hook preserves existing .ai-reviewignore content", async () => {
+  await withTempDir(async (destDir) => {
+    const existingReviewIgnore = "dist/\n*.snap\n";
+    await writeFile(path.join(destDir, ".ai-reviewignore"), existingReviewIgnore, "utf8");
+
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const reviewIgnoreText = await readFile(path.join(destDir, ".ai-reviewignore"), "utf8");
+    assert.equal(reviewIgnoreText, existingReviewIgnore);
   });
 });
 
