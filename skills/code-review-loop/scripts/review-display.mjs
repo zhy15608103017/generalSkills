@@ -61,6 +61,7 @@ export function buildHistoryEntry({ result, options = {}, context = {}, resolved
       warnings: summarizeFindings(outputResult.warnings),
     },
     verification_notes: outputResult.verification_notes || [],
+    reviewer_failures: summarizeReviewerFailures(outputResult.reviewer_failures),
   };
 }
 
@@ -77,6 +78,7 @@ export function renderHistoryMarkdownEntry(entry) {
     + `### 摘要\n\n${entry.summary || "未提供摘要。"}\n\n`
     + `### 阻塞问题\n\n${renderHistoryFindings(entry.findings.blocking)}\n\n`
     + `### 非阻塞提醒\n\n${renderHistoryFindings(entry.findings.warnings)}\n\n`
+    + `### 审核运行失败原因\n\n${renderHistoryReviewerFailures(entry.reviewer_failures)}\n\n`
     + `### 验证说明\n\n${renderNotes(entry.verification_notes)}\n`;
 }
 
@@ -108,6 +110,22 @@ function summarizeFindings(findings = []) {
   }));
 }
 
+function summarizeReviewerFailures(failures = []) {
+  return Array.isArray(failures)
+    ? failures.map((failure) => ({
+      phase: failure?.phase || "unknown",
+      reviewer: failure?.reviewer || "unknown",
+      provider: failure?.provider || "unknown",
+      model: failure?.model || "unknown",
+      category: failure?.category || "unknown",
+      retryable: Boolean(failure?.retryable),
+      message: failure?.message || "unknown error",
+      status: failure?.status ?? null,
+      attempts: failure?.attempts ?? null,
+    }))
+    : [];
+}
+
 function renderHistoryFindings(findings = []) {
   if (!findings.length) return "无";
   return findings.map((finding) => {
@@ -119,6 +137,16 @@ function renderHistoryFindings(findings = []) {
       + `  - 影响: ${finding.impact}\n`
       + `  - 建议修复: ${finding.suggested_fix}`;
   }).join("\n");
+}
+
+function renderHistoryReviewerFailures(failures = []) {
+  if (!failures.length) return "无";
+  return failures.map((failure) => `- [${failure.category}] ${failure.reviewer} (${failure.provider}/${failure.model})
+  - 阶段: ${failure.phase}
+  - 可重试: ${failure.retryable ? "是" : "否"}
+  - 状态码: ${failure.status ?? "无"}
+  - 尝试次数: ${failure.attempts ?? "无"}
+  - 原因: ${failure.message}`).join("\n");
 }
 
 function renderReviewers(reviewers = {}) {

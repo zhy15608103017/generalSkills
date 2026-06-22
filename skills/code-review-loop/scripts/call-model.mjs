@@ -255,6 +255,7 @@ async function callCliReviewer({ brief, systemPrompt, schema, providerOptions })
 function toReviewerSchema(schema) {
   const reviewerSchema = JSON.parse(JSON.stringify(schema));
   delete reviewerSchema.properties?.verdict_label;
+  delete reviewerSchema.properties?.reviewer_failures;
   delete reviewerSchema.$defs?.finding?.properties?.sources;
   return reviewerSchema;
 }
@@ -285,7 +286,11 @@ function runCliCommand(command, input, timeoutMs) {
     let stderr = "";
     const timeout = setTimeout(() => {
       child.kill();
-      reject(new Error(`CLI reviewer timed out after ${timeoutMs}ms.`));
+      reject(annotateReviewError(new Error(`CLI reviewer timed out after ${timeoutMs}ms.`), {
+        timeoutMs,
+        attempts: 1,
+        source: "cli",
+      }));
     }, timeoutMs);
 
     child.stdout.setEncoding("utf8");
@@ -299,15 +304,22 @@ function runCliCommand(command, input, timeoutMs) {
     child.on("error", (error) => {
       clearTimeout(timeout);
       if (error?.code === "ENOENT") {
-        reject(new Error(`CLI reviewer command was not found: ${command}`));
+        reject(annotateReviewError(new Error(`CLI reviewer command was not found: ${command}`), {
+          source: "cli",
+          attempts: 1,
+        }));
         return;
       }
-      reject(error);
+      reject(annotateReviewError(error, { source: "cli", attempts: 1 }));
     });
     child.on("close", (exitCode) => {
       clearTimeout(timeout);
       if (exitCode !== 0) {
-        reject(new Error(`CLI reviewer failed (${exitCode}): ${stderr || stdout}`));
+        reject(annotateReviewError(new Error(`CLI reviewer failed (${exitCode}): ${stderr || stdout}`), {
+          source: "cli",
+          attempts: 1,
+          exitCode,
+        }));
         return;
       }
       resolve({ stdout, stderr });
@@ -347,6 +359,10 @@ async function fetchJsonWithRetry(url, requestOptions, providerOptions, streamin
       return await readJsonResponse(response);
     } catch (error) {
       lastError = error;
+      annotateReviewError(error, {
+        attempts: attempt,
+        timeoutMs: providerOptions.timeoutMs,
+      });
       if (attempt >= attempts || !isRetryableModelError(error)) {
         throw error;
       }
@@ -437,6 +453,62 @@ function isRetryableModelError(error) {
     return error.status === 429 || error.status >= 500;
   }
   return false;
+}
+
+export function classifyReviewError(error = {}) {
+  const message = String(error?.message || error || "unknown error");
+  const status = typeof error?.status === "number" ? error.status : null;
+  const source = String(error?.source || "");
+  const code = String(error?.code || "");
+  const category = reviewErrorCategory({ error, message, status, source, code });
+
+  return {
+    category,
+    retryable: retryableReviewError(category, status),
+    message,
+    status,
+    attempts: normalizePositiveInteger(error?.attempts),
+  };
+}
+
+function annotateReviewError(error, metadata = {}) {
+  if (error && typeof error === "object") {
+    for (const [key, value] of Object.entries(metadata)) {
+      if (value === undefined) continue;
+      if (["attempts", "timeoutMs"].includes(key) || error[key] === undefined) {
+        error[key] = value;
+      }
+    }
+  }
+  return error;
+}
+
+function reviewErrorCategory({ error, message, status, source, code }) {
+  const normalized = message.toLowerCase();
+  if (error?.name === "AbortError" || /timed?\s*out|timeout|aborted/.test(normalized)) return "timeout";
+  if (status === 401 || status === 403) return "auth";
+  if (status === 429) return "rate_limit";
+  if (typeof status === "number" && status >= 500) return "server";
+  if (/missing api key|missing base url|unknown provider|missing cli command|command was not found/.test(normalized)) return "config";
+  if (/reviewer response did not contain valid json|reviewer returned an empty response|schema errors?/.test(normalized)) return "bad_response";
+  if (source === "cli" || /cli reviewer/.test(normalized)) return "cli";
+  if (
+    error instanceof TypeError ||
+    /fetch failed|network|econnreset|enotfound|etimedout|eai_again|socket hang up/.test(normalized) ||
+    ["ECONNRESET", "ENOTFOUND", "ETIMEDOUT", "EAI_AGAIN", "ECONNREFUSED"].includes(code)
+  ) {
+    return "network";
+  }
+  return "unknown";
+}
+
+function retryableReviewError(category, status) {
+  if (["timeout", "network", "rate_limit", "server"].includes(category)) return true;
+  return typeof status === "number" && (status === 429 || status >= 500);
+}
+
+function normalizePositiveInteger(value) {
+  return Number.isInteger(value) && value >= 1 ? value : null;
 }
 
 function delay(ms) {

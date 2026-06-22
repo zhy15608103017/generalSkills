@@ -4,6 +4,7 @@ export function renderMarkdownReport(result) {
   const blocking = renderFindings(result.blocking_findings);
   const warnings = renderFindings(result.warnings);
   const notes = result.verification_notes?.map((note) => `- ${note}`).join("\n") || "- 无";
+  const reviewerFailures = renderReviewerFailures(result.reviewer_failures);
 
   return `# AI 代码审核报告
 
@@ -26,6 +27,10 @@ ${warnings || "无"}
 ## 验证说明
 
 ${notes}
+
+## 审核运行失败原因
+
+${reviewerFailures}
 
 ## 置信度
 
@@ -56,6 +61,22 @@ function renderSources(finding) {
   const sources = normalizeSources(finding.sources);
   if (!sources.length) return "未知";
   return sources.map(formatSource).join(", ");
+}
+
+function renderReviewerFailures(failures = []) {
+  if (!Array.isArray(failures) || failures.length === 0) return "无";
+  return failures
+    .map((failure) => `- [${renderText(failure.category, "unknown")}] ${renderText(failure.reviewer, "unknown")} (${renderText(failure.provider, "unknown")}/${renderText(failure.model, "unknown")})
+  - 阶段: ${renderText(failure.phase, "unknown")}
+  - 可重试: ${failure.retryable ? "是" : "否"}
+  - 状态码: ${renderFailureValue(failure.status)}
+  - 尝试次数: ${renderFailureValue(failure.attempts)}
+  - 原因: ${renderText(failure.message, "unknown error")}`)
+    .join("\n");
+}
+
+function renderFailureValue(value) {
+  return value === undefined || value === null || value === "" ? "无" : String(value);
 }
 
 function formatSource(source) {

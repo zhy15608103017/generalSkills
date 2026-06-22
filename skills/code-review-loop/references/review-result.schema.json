@@ -41,6 +41,13 @@
         "type": "string"
       }
     },
+    "reviewer_failures": {
+      "type": "array",
+      "description": "Runner-owned model invocation failures, added by the local review script rather than the reviewer model.",
+      "items": {
+        "$ref": "#/$defs/reviewer_failure"
+      }
+    },
     "confidence": {
       "type": "number",
       "minimum": 0,
@@ -104,6 +111,54 @@
               }
             }
           }
+        }
+      }
+    },
+    "reviewer_failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase",
+        "reviewer",
+        "provider",
+        "model",
+        "category",
+        "retryable",
+        "message",
+        "status",
+        "attempts"
+      ],
+      "properties": {
+        "phase": {
+          "type": "string",
+          "enum": ["requirement_audit", "code_review", "unknown"]
+        },
+        "reviewer": {
+          "type": "string",
+          "enum": ["primary", "second", "requirement-auditor", "unknown"]
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["timeout", "network", "auth", "rate_limit", "server", "config", "bad_response", "cli", "unknown"]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "status": {
+          "type": ["integer", "null"]
+        },
+        "attempts": {
+          "type": ["integer", "null"],
+          "minimum": 1
         }
       }
     }
