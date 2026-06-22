@@ -75,6 +75,12 @@ test("parseArgs accepts second-review timeout, retry, and confidence threshold o
   assert.equal(args.secondConfidenceThreshold, 0.7);
 });
 
+test("parseArgs accepts disabling the requirement audit cache", () => {
+  const args = parseArgs(["--no-requirement-audit-cache"]);
+
+  assert.equal(args.noRequirementAuditCache, true);
+});
+
 test("buildSecondReviewOptions applies second-review timeout and retry defaults", () => {
   const secondOptions = buildSecondReviewOptions(secondReviewerOptions(), providersConfig);
 

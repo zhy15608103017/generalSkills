@@ -1,5 +1,6 @@
 import { execFile, exec, spawn } from "node:child_process";
-import { promises as fs } from "node:fs";
+import crypto from "node:crypto";
+import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -37,6 +38,8 @@ export function parseArgs(argv) {
 
     if (arg === "--dry-run") {
       args.dryRun = true;
+    } else if (arg === "--no-requirement-audit-cache") {
+      args.noRequirementAuditCache = true;
     } else if (arg === "--request" && next) {
       args.request = next;
       index += 1;
@@ -444,9 +447,12 @@ async function readDocs(root, options) {
       continue;
     }
     if (!(await fileExists(resolved))) continue;
+    const contentFingerprint = await fileContentFingerprint(resolved);
     results.push({
       label,
       path: path.relative(root, resolved),
+      contentHash: contentFingerprint.hash,
+      contentBytes: contentFingerprint.bytes,
       content: await readTextFileSnippet(resolved, maxDocBytes),
     });
   }
@@ -851,6 +857,24 @@ async function readIfExists(filePath) {
     return await fs.readFile(filePath, "utf8");
   } catch {
     return "";
+  }
+}
+
+async function fileContentFingerprint(filePath) {
+  try {
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile()) return { hash: "", bytes: 0 };
+
+    const hash = crypto.createHash("sha256");
+    await new Promise((resolve, reject) => {
+      const stream = createReadStream(filePath);
+      stream.on("data", (chunk) => hash.update(chunk));
+      stream.on("error", reject);
+      stream.on("end", resolve);
+    });
+    return { hash: hash.digest("hex"), bytes: stat.size };
+  } catch {
+    return { hash: "", bytes: 0 };
   }
 }
 

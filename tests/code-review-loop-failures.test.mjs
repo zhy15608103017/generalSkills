@@ -8,12 +8,19 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import {
+  runRequirementAudit,
   runReviewPasses,
 } from "../skills/code-review-loop/scripts/ai-review.mjs";
 import {
   buildHistoryEntry,
   renderHistoryMarkdownEntry,
 } from "../skills/code-review-loop/scripts/review-display.mjs";
+import {
+  buildRequirementAuditCacheKey,
+  loadRequirementAuditorPrompt,
+  readCachedRequirementAudit,
+  writeCachedRequirementAudit,
+} from "../skills/code-review-loop/scripts/requirement-audit.mjs";
 import { renderMarkdownReport } from "../skills/code-review-loop/scripts/review-report.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -27,6 +34,28 @@ function passResult(overrides = {}) {
     warnings: [],
     verification_notes: [],
     confidence: 0.95,
+    ...overrides,
+  };
+}
+
+function failResult(overrides = {}) {
+  return {
+    verdict: "fail",
+    summary: "requirements mismatch",
+    blocking_findings: [
+      {
+        severity: "P1",
+        title: "Mismatch",
+        file: ".ai-review/review-context/current-request.md",
+        line: 1,
+        evidence: "bad understanding",
+        impact: "wrong review",
+        suggested_fix: "fix context",
+      },
+    ],
+    warnings: [],
+    verification_notes: [],
+    confidence: 0.9,
     ...overrides,
   };
 }
@@ -402,6 +431,207 @@ test("history markdown displays structured reviewer failures", () => {
   assert.match(markdown, /requirement-auditor/);
   assert.match(markdown, /network/);
   assert.match(markdown, /fetch failed/);
+});
+
+test("requirement audit cache key ignores generated time but tracks requirement inputs", () => {
+  const baseContext = {
+    root: "/repo",
+    generatedAt: "2026-06-22 10:00:00",
+    projectRules: "rules",
+    docs: [
+      { label: "request", path: ".ai-review/review-context/current-request.md", content: "do x" },
+    ],
+  };
+  const reviewer = { provider: "primary", model: "primary-model" };
+
+  const first = buildRequirementAuditCacheKey({
+    context: baseContext,
+    auditPrompt: "audit prompt",
+    primaryResolved: reviewer,
+  });
+  const sameInputsDifferentTime = buildRequirementAuditCacheKey({
+    context: { ...baseContext, generatedAt: "2026-06-22 10:01:00" },
+    auditPrompt: "audit prompt",
+    primaryResolved: reviewer,
+  });
+  const changedRequest = buildRequirementAuditCacheKey({
+    context: {
+      ...baseContext,
+      docs: [{ ...baseContext.docs[0], content: "do y" }],
+    },
+    auditPrompt: "audit prompt",
+    primaryResolved: reviewer,
+  });
+
+  assert.equal(first, sameInputsDifferentTime);
+  assert.notEqual(first, changedRequest);
+});
+
+test("requirement audit cache key tracks full document hashes beyond snippets", () => {
+  const baseDoc = {
+    label: "request",
+    path: ".ai-review/review-context/current-request.md",
+    content: "same visible snippet",
+    contentHash: "full-hash-a",
+    contentBytes: 50000,
+  };
+  const baseContext = {
+    root: "/repo",
+    projectRules: "rules",
+    docs: [baseDoc],
+  };
+  const reviewer = { provider: "primary", model: "primary-model" };
+
+  const first = buildRequirementAuditCacheKey({
+    context: baseContext,
+    auditPrompt: "audit prompt",
+    primaryResolved: reviewer,
+  });
+  const changedTail = buildRequirementAuditCacheKey({
+    context: {
+      ...baseContext,
+      docs: [{ ...baseDoc, contentHash: "full-hash-b" }],
+    },
+    auditPrompt: "audit prompt",
+    primaryResolved: reviewer,
+  });
+
+  assert.notEqual(first, changedTail);
+});
+
+test("requirement audit cache only reuses pass results for the matching key", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "requirement-audit-cache-"));
+  try {
+    const result = passResult({
+      summary: "requirements ok",
+      verification_notes: ["fresh audit"],
+    });
+
+    await writeCachedRequirementAudit(tempDir, "cache-key", result);
+    const cached = await readCachedRequirementAudit(tempDir, "cache-key");
+    assert.equal(cached.verdict, "pass");
+    assert.match(cached.verification_notes[0], /缓存/);
+    assert.equal(cached.verification_notes[1], "fresh audit");
+
+    const miss = await readCachedRequirementAudit(tempDir, "other-key");
+    assert.equal(miss, null);
+
+    await writeCachedRequirementAudit(tempDir, "fail-key", {
+      ...result,
+      verdict: "fail",
+    });
+    assert.equal(await readCachedRequirementAudit(tempDir, "fail-key"), null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("requirement audit cache write failures are non-fatal", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "requirement-audit-cache-failure-"));
+  try {
+    const fileAsOutDir = path.join(tempDir, "not-a-directory");
+    await writeFile(fileAsOutDir, "file", "utf8");
+
+    await assert.doesNotReject(() => writeCachedRequirementAudit(
+      fileAsOutDir,
+      "cache-key",
+      passResult(),
+    ));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("cached requirement audit pass can feed the code review flow", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "requirement-audit-flow-"));
+  try {
+    const context = {
+      root: tempDir,
+      generatedAt: "2026-06-22 10:00:00",
+      projectRules: "rules",
+      docs: [
+        {
+          label: "request",
+          path: ".ai-review/review-context/current-request.md",
+          content: "do x",
+          contentHash: "hash-x",
+          contentBytes: 4,
+        },
+      ],
+    };
+    const primaryResolved = { provider: "primary", model: "primary-model" };
+    const auditPrompt = await loadRequirementAuditorPrompt();
+    const cacheKey = buildRequirementAuditCacheKey({ context, auditPrompt, primaryResolved });
+    await writeCachedRequirementAudit(tempDir, cacheKey, passResult({ summary: "cached audit" }));
+
+    const audit = await runRequirementAudit({
+      context,
+      outDir: tempDir,
+      assets: { schema: {}, providersConfig },
+      options: {},
+      primaryResolved,
+      callReviewModelFn: async () => {
+        throw new Error("requirement model should not run on cache hit");
+      },
+    });
+    assert.equal(audit.result.summary, "cached audit");
+
+    const reviewers = [];
+    const reviewRun = await runReviewPasses({
+      brief: "brief",
+      assets: { systemPrompt: "prompt", schema: {}, providersConfig },
+      options: {},
+      primaryResolved,
+      secondResolved: null,
+      callReviewModelFn: async () => {
+        reviewers.push("code-review");
+        return passResult({ summary: "code review ran" });
+      },
+    });
+
+    assert.deepEqual(reviewers, ["code-review"]);
+    assert.equal(reviewRun.result.summary, "code review ran");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fresh non-pass requirement audit clears a matching old pass cache", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "requirement-audit-clear-"));
+  try {
+    const context = {
+      root: tempDir,
+      generatedAt: "2026-06-22 10:00:00",
+      projectRules: "rules",
+      docs: [
+        {
+          label: "request",
+          path: ".ai-review/review-context/current-request.md",
+          content: "do x",
+          contentHash: "hash-x",
+          contentBytes: 4,
+        },
+      ],
+    };
+    const primaryResolved = { provider: "primary", model: "primary-model" };
+    const auditPrompt = await loadRequirementAuditorPrompt();
+    const cacheKey = buildRequirementAuditCacheKey({ context, auditPrompt, primaryResolved });
+    await writeCachedRequirementAudit(tempDir, cacheKey, passResult({ summary: "old pass" }));
+
+    const audit = await runRequirementAudit({
+      context,
+      outDir: tempDir,
+      assets: { schema: {}, providersConfig },
+      options: { noRequirementAuditCache: true },
+      primaryResolved,
+      callReviewModelFn: async () => failResult(),
+    });
+
+    assert.equal(audit.result.verdict, "fail");
+    assert.equal(await readCachedRequirementAudit(tempDir, cacheKey), null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("ai-review writes structured failure output when primary provider config is invalid", async () => {

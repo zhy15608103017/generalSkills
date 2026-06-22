@@ -68,6 +68,8 @@ The gate must pass before code is reviewed. If it returns `fail` or `needs_human
 
 The requirement auditor checks only whether the current agent understanding and acceptance criteria faithfully match the user's original request, later corrections, clarifications, and explicit anti-examples. It must not treat the current understanding as ground truth.
 
+Successful requirement-understanding audits are cached under `.ai-review/cache/requirement-audit.json`. The cache is reused only for prior `pass` results, and it is invalidated when the requirement/design/plan docs, project `AGENTS.md`, auditor prompt, or primary reviewer provider/model changes. To force a fresh requirement audit, pass `--no-requirement-audit-cache`.
+
 ## Default Flow
 
 1. Create or update `.ai-review/review-context/current-request.md` with the original request, user corrections, current agent understanding, anti-examples, design, non-goals, acceptance criteria, and suggested verification.
@@ -148,6 +150,12 @@ Use automatic high-accuracy profile:
 
 ```bash
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --path src --verify "git diff --check"
+```
+
+Force a fresh requirement-understanding audit instead of reusing the cached pass:
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --no-requirement-audit-cache --verify "git diff --check"
 ```
 
 Use a second reviewer model:
