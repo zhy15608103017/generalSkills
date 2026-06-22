@@ -16,11 +16,13 @@ Read the project first, then write the smallest clear change that fits the exist
 3. Decide where new code belongs by following the repository's current layout for utilities, API clients, services, constants, enums, and types.
 4. Match naming style from the current file first, then the current module, then the repository's dominant style.
 5. Choose the simplest implementation using language features, standard libraries, and existing project utilities.
-6. Write code in a readable order: validate inputs, prepare data, run core logic, handle logging or telemetry, then return.
-7. Separate pure data transformation from IO, network requests, database work, file access, and global state mutation.
-8. Preserve existing public signatures, return shapes, error codes, and behavior unless the user explicitly requests a breaking change.
-9. Add or update focused tests for behavior, edge cases, expected business errors, and external dependency failures.
-10. Run the relevant validation commands from the project, such as tests, lint, typecheck, or repository-specific scripts.
+6. For complex, non-domain-specific problems, evaluate mature community libraries before building from scratch.
+7. If a new dependency may be warranted, recommend one primary option and two alternatives, summarize tradeoffs such as maintenance cost, ecosystem maturity, bundle size, type support, and compatibility with the current repository, and ask the user to confirm before adding it.
+8. Write code in a readable order: validate inputs, prepare data, run core logic, handle logging or telemetry, then return.
+9. Separate pure data transformation from IO, network requests, database work, file access, and global state mutation.
+10. Preserve existing public signatures, return shapes, error codes, and behavior unless the user explicitly requests a breaking change.
+11. Add or update focused tests for behavior, edge cases, expected business errors, and external dependency failures.
+12. Run the relevant validation commands from the project, such as tests, lint, typecheck, or repository-specific scripts.
 
 ## Placement Rules
 
@@ -32,6 +34,7 @@ Read the project first, then write the smallest clear change that fits the exist
 ## Simplicity Rules
 
 - Do not add new dependencies, frameworks, middleware, or design patterns for hypothetical flexibility.
+- Do not introduce a third-party library when existing project utilities, platform features, or a small local implementation are sufficient.
 - Reuse project helpers before creating new abstractions.
 - Split a function when nesting exceeds 3 levels, cyclomatic complexity is high, or a reader cannot understand the flow quickly.
 - Extract subfunctions only when they make the main flow clearer or isolate meaningful reusable behavior.
@@ -65,8 +68,8 @@ Before reporting completion:
 
 - Existing style, naming, and placement were inspected and followed.
 - No unnecessary dependency, framework, abstraction, or broad refactor was introduced.
+- Any new dependency was justified, compared against alternatives, and confirmed by the user before adoption.
 - Public compatibility was preserved or the requested breaking change was called out.
 - Boundary cases and expected business errors are handled.
 - CSS uses the project styling system, with reusable visual values extracted when appropriate.
 - Relevant tests or validation commands were run, or any reason they could not run is stated clearly.
-

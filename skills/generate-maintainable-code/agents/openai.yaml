@@ -1,3 +1,3 @@
 display_name: Generate Maintainable Code
 short_description: Follow local style and simple, robust code generation rules.
-default_prompt: Generate or modify code while following the repository's style, placement, CSS, compatibility, edge-case, and validation rules.
+default_prompt: Generate or modify code while following the repository's style, placement, cautious dependency selection, CSS, compatibility, edge-case, and validation rules.
