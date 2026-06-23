@@ -426,12 +426,14 @@ ${body}`;
 }
 
 async function readDocs(root, options) {
+  const checklistDocs = Array.isArray(options.checklists) ? options.checklists : [];
+  const extraDocs = Array.isArray(options.docs) ? options.docs : [];
   const docs = [
     ["用户需求", options.request || ".ai-review/review-context/current-request.md"],
     ["已接受设计", options.design || ".ai-review/review-context/current-design.md"],
     ["实现计划", options.plan || ".ai-review/review-context/current-plan.md"],
-    ...options.checklists.map((docPath, index) => [`审核清单 ${index + 1}`, docPath]),
-    ...options.docs.map((docPath, index) => [`额外文档 ${index + 1}`, docPath]),
+    ...checklistDocs.map((docPath, index) => [`审核清单 ${index + 1}`, docPath]),
+    ...extraDocs.map((docPath, index) => [`额外文档 ${index + 1}`, docPath]),
   ].filter(([, docPath]) => docPath);
 
   const results = [];
@@ -474,7 +476,6 @@ async function readChangedFileContexts(root, changedFiles, options) {
   const maxFileBytes = Number.isFinite(options.maxFileBytes) ? options.maxFileBytes : 120000;
   const cacheDir = path.join(root, ".ai-review", "cache");
   const cache = await loadFileContextCache(cacheDir);
-
   for (const changedFile of changedFiles.slice(0, maxFiles)) {
     if (isSecretPath(changedFile)) {
       contexts.push({ path: changedFile, content: "[疑似密钥文件已省略]" });

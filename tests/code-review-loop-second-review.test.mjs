@@ -26,6 +26,24 @@ const providersConfig = {
   },
 };
 
+const providerBudgetConfig = {
+  defaultProvider: "cli",
+  providers: {
+    cli: {
+      model: "cli-reviewer",
+      transport: "cli",
+      timeoutMs: 180000,
+      retries: 0,
+    },
+    second: {
+      model: "second-model",
+      baseUrl: "https://second.example/v1",
+      apiStyle: "chat",
+      transport: "openai-compatible",
+    },
+  },
+};
+
 function passResult(overrides = {}) {
   return {
     verdict: "pass",
@@ -81,10 +99,38 @@ test("parseArgs accepts disabling the requirement audit cache", () => {
   assert.equal(args.noRequirementAuditCache, true);
 });
 
-test("buildSecondReviewOptions applies second-review timeout and retry defaults", () => {
+test("buildSecondReviewOptions inherits the effective primary review budget by default", () => {
   const secondOptions = buildSecondReviewOptions(secondReviewerOptions(), providersConfig);
 
-  assert.equal(secondOptions.timeoutMs, 60000);
+  assert.equal(secondOptions.timeoutMs, 120000);
+  assert.equal(secondOptions.retries, 1);
+});
+
+test("buildSecondReviewOptions inherits explicit primary review budget when provided", () => {
+  const secondOptions = buildSecondReviewOptions(
+    secondReviewerOptions([
+      "--timeout-ms",
+      "180000",
+      "--retries",
+      "2",
+    ]),
+    providersConfig,
+  );
+
+  assert.equal(secondOptions.timeoutMs, 180000);
+  assert.equal(secondOptions.retries, 2);
+});
+
+test("buildSecondReviewOptions inherits resolved primary provider budget defaults", () => {
+  const secondOptions = buildSecondReviewOptions(
+    secondReviewerOptions([
+      "--provider",
+      "cli",
+    ]),
+    providerBudgetConfig,
+  );
+
+  assert.equal(secondOptions.timeoutMs, 180000);
   assert.equal(secondOptions.retries, 0);
 });
 

@@ -117,14 +117,21 @@ AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD=0.8
 
 `auto` 模式下，主模型返回的 P0/P1/P2 数量达到阈值，或主审 `confidence` 小于 `AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD`，都会触发二审。默认置信度阈值是 `0.8`。
 
-二审模型使用独立的默认请求预算：
+二审模型默认继承主审当前已生效的请求预算，包括 `high-accuracy` profile、`--timeout-ms`、`--retries` 或对应环境变量带来的覆盖。
+
+也就是说：
+
+- 如果主审因为 `high-accuracy` 使用了更长超时，二审默认也会继承这组预算。
+- 如果显式设置了 `--second-timeout-ms` / `AI_REVIEW_SECOND_TIMEOUT_MS` 或 `--second-retries` / `AI_REVIEW_SECOND_RETRIES`，则二审使用自己的独立值。
+
+例如可以单独给二审更长预算：
 
 ```env
-AI_REVIEW_SECOND_TIMEOUT_MS=60000
-AI_REVIEW_SECOND_RETRIES=0
+AI_REVIEW_SECOND_TIMEOUT_MS=180000
+AI_REVIEW_SECOND_RETRIES=1
 ```
 
-如果设置了 `--second-timeout-ms` / `AI_REVIEW_SECOND_TIMEOUT_MS` 或 `--second-retries` / `AI_REVIEW_SECOND_RETRIES`，会覆盖二审默认值。通用 `--timeout-ms` 和 `--retries` 仍用于主审。
+如果设置了 `--second-timeout-ms` / `AI_REVIEW_SECOND_TIMEOUT_MS` 或 `--second-retries` / `AI_REVIEW_SECOND_RETRIES`，会覆盖继承来的预算。
 
 优先级：
 

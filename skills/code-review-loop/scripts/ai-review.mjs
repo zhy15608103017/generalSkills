@@ -530,6 +530,28 @@ export function buildSecondReviewOptions(options, providersConfig) {
     return null;
   }
 
+  let inheritedPrimaryBudget = null;
+  if (providersConfig) {
+    try {
+      inheritedPrimaryBudget = resolveProviderOptions(options, providersConfig);
+    } catch {
+      inheritedPrimaryBudget = null;
+    }
+  }
+
+  const inheritedTimeoutMs = positiveNumber(
+    options.timeoutMs,
+    readEnv("AI_REVIEW_TIMEOUT_MS"),
+    inheritedPrimaryBudget?.timeoutMs,
+    120000,
+  );
+  const inheritedRetries = nonNegativeInteger(
+    options.retries,
+    readEnv("AI_REVIEW_RETRIES"),
+    inheritedPrimaryBudget?.retries,
+    1,
+  );
+
   const secondConfig = {
     provider: options.secondProvider || readEnv("AI_REVIEW_SECOND_PROVIDER"),
     model: options.secondModel || readEnv("AI_REVIEW_SECOND_MODEL"),
@@ -548,8 +570,8 @@ export function buildSecondReviewOptions(options, providersConfig) {
     ...options,
     usePrimaryEnv: false,
     secondReviewMode,
-    timeoutMs: positiveNumber(options.secondTimeoutMs, readEnv("AI_REVIEW_SECOND_TIMEOUT_MS"), 60000),
-    retries: nonNegativeInteger(options.secondRetries, readEnv("AI_REVIEW_SECOND_RETRIES"), 0),
+    timeoutMs: positiveNumber(options.secondTimeoutMs, readEnv("AI_REVIEW_SECOND_TIMEOUT_MS"), inheritedTimeoutMs),
+    retries: nonNegativeInteger(options.secondRetries, readEnv("AI_REVIEW_SECOND_RETRIES"), inheritedRetries),
     provider: secondConfig.provider || (secondConfig.model ? undefined : options.provider),
     model: secondConfig.model || options.model,
     baseUrl: secondConfig.baseUrl || options.baseUrl,

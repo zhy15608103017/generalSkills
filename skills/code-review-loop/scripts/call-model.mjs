@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseReviewResult } from "./review-result.mjs";
+import { AssetsCacheManager } from "./assets-cache.mjs";
 
 export {
   isBlockingFinding,
@@ -12,19 +13,24 @@ export {
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const skillDir = path.dirname(scriptDir);
+const assetsCache = new AssetsCacheManager(60000);
 
 export async function loadReviewerAssets() {
-  const [systemPrompt, schemaText, providersText] = await Promise.all([
-    fs.readFile(path.join(skillDir, "references", "reviewer-prompt.md"), "utf8"),
-    fs.readFile(path.join(skillDir, "references", "review-result.schema.json"), "utf8"),
-    fs.readFile(path.join(skillDir, "references", "model-providers.json"), "utf8"),
-  ]);
+  const cacheKey = `assets-${skillDir}`;
 
-  return {
-    systemPrompt,
-    schema: JSON.parse(schemaText),
-    providersConfig: JSON.parse(providersText),
-  };
+  return await assetsCache.get(cacheKey, async () => {
+    const [systemPrompt, schemaText, providersText] = await Promise.all([
+      fs.readFile(path.join(skillDir, "references", "reviewer-prompt.md"), "utf8"),
+      fs.readFile(path.join(skillDir, "references", "review-result.schema.json"), "utf8"),
+      fs.readFile(path.join(skillDir, "references", "model-providers.json"), "utf8"),
+    ]);
+
+    return {
+      systemPrompt,
+      schema: JSON.parse(schemaText),
+      providersConfig: JSON.parse(providersText),
+    };
+  });
 }
 
 export async function loadEnvFile(root, fileName = ".env") {
