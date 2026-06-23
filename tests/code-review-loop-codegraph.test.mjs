@@ -319,3 +319,28 @@ test("collectReviewContext excludes slash-pattern directories and ignored untrac
     }
   });
 });
+
+test("collectReviewContext applies default file byte budget without parseArgs", async () => {
+  await withTempDir(async (tempDir) => {
+    const repoDir = path.join(tempDir, "repo");
+    await mkdir(repoDir, { recursive: true });
+    await initGitRepo(repoDir, {
+      dirtyIndex: false,
+    });
+    const previousCwd = process.cwd();
+
+    try {
+      await writeRepoFile(repoDir, "new-file.js", "export const untracked = 1;\n");
+
+      process.chdir(repoDir);
+      const context = await collectReviewContext({ allowEmpty: true });
+
+      assert.deepEqual(context.changedFiles, ["new-file.js"]);
+      assert.match(context.diff, /export const untracked = 1/);
+      assert.equal(context.fileContexts[0]?.path, "new-file.js");
+      assert.match(context.fileContexts[0]?.content || "", /export const untracked = 1/);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+});

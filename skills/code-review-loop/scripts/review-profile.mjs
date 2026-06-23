@@ -82,3 +82,15 @@ export function applyReviewProfile(options, profile) {
 
   return profile;
 }
+
+export function maxProfileFileBytes(options = {}) {
+  if (options.explicitOptions?.maxFileBytes) {
+    return options.maxFileBytes;
+  }
+
+  if (["auto", "high-accuracy"].includes(options.profile)) {
+    return Math.max(options.maxFileBytes || 0, HIGH_ACCURACY_OPTIONS.maxFileBytes);
+  }
+
+  return options.maxFileBytes;
+}
