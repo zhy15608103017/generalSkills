@@ -336,32 +336,97 @@ API 请求使用 `AbortController` 做超时。可重试错误包括：
 3. `.ai-review/**` 和 secret-like 文件会被排除。
 4. CodeGraph 失败是 best-effort，会写入 brief，不阻断审核。
 
-## 输出文件
+## `.ai-review` 输出文件详解
 
-默认输出目录是 `.ai-review`。
-
-| 文件 | 作用 |
-| --- | --- |
-| `.ai-review/latest-brief.md` | 本次发送给代码审核模型的上下文 |
-| `.ai-review/latest-report.md` | 人读 Markdown 报告 |
-| `.ai-review/latest-result.json` | 结构化审核结果 |
-| `.ai-review/latest-requirement-audit-result.json` | 需求理解 gate 结构化结果 |
-| `.ai-review/latest-requirement-audit-brief.md` | 需求理解 gate brief |
-| `.ai-review/history.jsonl` | 历史审核结构化索引 |
-| `.ai-review/history.md` | 历史审核 Markdown 索引 |
-| `.ai-review/runs/<run-id>/result.json` | 某次运行的结果快照 |
-| `.ai-review/runs/<run-id>/report.md` | 某次运行的报告快照 |
-| `.ai-review/runs/<run-id>/brief.md` | 某次运行的 brief 快照 |
-
-`run-id` 来自格式化时间，形如：
+默认输出根目录为 `.ai-review`，可通过 `--out-dir` 覆盖。整体结构如下：
 
 ```text
-YYYY-MM-DD_hh-mm-ss
+.ai-review/
+  latest-brief.md                                ← 每次审核开始时写入，总是最新
+  latest-result.json                              ← 审核完成后写入（可能含需求审核或代码审核结果）
+  latest-report.md                               ← 与 latest-result.json 配套的人读报告
+  latest-requirement-audit-result.json            ← 仅在需求理解审核阶段生成
+  latest-requirement-audit-brief.md               ← 仅在需求理解审核阶段生成
+  history.jsonl                                  ← 审核历史索引（追加写入，超限时整体重写）
+  history.md                                     ← 审核历史的 Markdown 可读版本
+  runs/
+    <run-id>/
+      result.json                                ← 单次运行的审核结果快照
+      report.md                                  ← 单次运行的报告快照
+      brief.md                                   ← 单次运行的 brief 快照
+  cache/
+    requirement-audit.json                       ← 需求审核通过的缓存结果
+    file-contexts.json                           ← 变更文件内容片段的读取缓存
+  review-context/
+    current-request.md                           ← 用户/agent 手写或由 write-review-context.mjs 生成的需求上下文
+    current-design.md                            ← 可选：已接受设计（手写或生成）
+    current-plan.md                              ← 可选：实现计划（手写或生成）
 ```
 
-默认保留最近 5 条 history/run 记录，可通过 `--history-limit` 或 `AI_REVIEW_HISTORY_LIMIT` 调整。设置为 `0` 时不保留历史运行目录和索引条目。
+### 顶层 `latest-*` 文件
 
-`.gskills/install.mjs` 会在消费项目根目录创建空的 `.ai-reviewignore`，并把 `.ai-review`、`.ai-reviewignore` 加入消费项目 `.gitignore`。这样 review 产物不会被误提交，后续也可以直接维护持久的 review 排除规则。
+每次运行 `ai-review.mjs` 后，这些文件总是会被覆盖为最新结果。
+
+| 文件 | 格式 | 何时生成 | 内容 |
+| --- | --- | --- | --- |
+| `latest-brief.md` | Markdown | 审核开始时（`main()` 阶段），在任何模型调用之前 | 发送给代码审核模型的完整上下文摘要。包含：仓库根目录、生成时间、profile、git status、diff stat、完整 diff（经脱敏和截断）、变更文件内容上下文（经脱敏）、项目规则（`AGENTS.md`）、需求/设计/计划文档、审核清单、验证命令输出、可选的 CodeGraph 影响分析。**可用于检查"模型到底看到了什么"。** |
+| `latest-result.json` | JSON | 审核完成后（需求审核或代码审核结束后） | 最近一次审核的完整结构化结果。包含 `verdict`（`pass`/`fail`/`needs_human`）、`summary`、`blocking_findings`（P0-P3 数组，每项含 severity/title/file/line/evidence/impact/suggested_fix/sources）、`warnings`、`verification_notes`、`confidence`（0-1）、`verdict_label`（中文展示标签）和 `reviewer_failures`（模型调用失败的详细信息）。**是自动化工具读取审核结论的主要入口。** |
+| `latest-report.md` | Markdown | 与 `latest-result.json` 同时生成 | 人读的审核报告。将 `latest-result.json` 中的 verdict、findings、verification_notes 渲染为结构化 Markdown，适合在终端或编辑器中直接查看。 |
+
+### 需求理解审核产物
+
+这两个文件**仅在需求理解审核阶段生成**。如果需求审核 pass，代码审核继续进行，但这两个文件不会被后续代码审核覆盖。如果需求审核返回 `fail` 或 `needs_human`，代码审核被跳过，`latest-result.json` 和 `latest-report.md` 写入的也是需求审核的结果。
+
+| 文件 | 格式 | 何时生成 | 内容 |
+| --- | --- | --- | --- |
+| `latest-requirement-audit-result.json` | JSON | 需求理解审核完成后 | 需求审核的独立结构化结果，schema 与代码审核相同（verdict/summary/findings/confidence），但 findings 只关注"当前模型理解是否忠实于用户请求"，不涉及代码实现问题。 |
+| `latest-requirement-audit-brief.md` | Markdown | 与上述 JSON 同时生成 | 发送给需求理解审核模型的上下文。结构与 `latest-brief.md` 类似，但包含需求上下文、项目规则和文档内容，**不包含 diff 和文件上下文**。 |
+
+### 历史索引
+
+| 文件 | 格式 | 行为 | 内容 |
+| --- | --- | --- | --- |
+| `history.jsonl` | JSONL（每行一个 JSON） | 每次审核后追加一条记录；超限时整体重写裁剪 | 历史审核的结构化索引。每条记录包含 `runId`、`timestamp`、`verdict`、`provider`/`model`、`resolved`（双模型信息）、`scope`、`counts`（各级别 finding 数量）等。适合工具化查询和趋势分析。 |
+| `history.md` | Markdown | 与 `history.jsonl` 同步更新 | 与 `history.jsonl` 一一对应的人读版本，每条记录渲染为一个 Markdown 段落。 |
+
+默认保留最近 5 条（由 `AI_REVIEW_HISTORY_LIMIT` 或 `--history-limit` 控制）。设为 `0` 时，历史索引和 runs 目录均不保留。
+
+### `runs/<run-id>/` 归档
+
+每次审核运行会在 `runs/` 下创建一个以时间戳命名的目录，保存本次运行的完整快照。
+
+`run-id` 格式为 `YYYY-MM-DD_hh-mm-ss`（受 `AI_REVIEW_TIME_ZONE` 影响）。如果同秒内多次运行，自动追加 `-2`、`-3` 后缀。
+
+| 文件 | 与顶层的关系 |
+| --- | --- |
+| `runs/<run-id>/result.json` | 内容与生成时的 `latest-result.json` 相同，是历史快照 |
+| `runs/<run-id>/report.md` | 内容与生成时的 `latest-report.md` 相同 |
+| `runs/<run-id>/brief.md` | 内容与生成时的 `latest-brief.md` 相同 |
+
+当 `latest-*` 被下次审核覆盖后，runs 目录是唯一能回溯到历史审核详情的地方。超出保留条数的 run 目录会被自动清理。
+
+### `cache/` 目录
+
+缓存文件由脚本管理，**不建议手动编辑**。
+
+| 文件 | 格式 | 何时写入 | 失效条件 | 内容 |
+| --- | --- | --- | --- | --- |
+| `cache/requirement-audit.json` | JSON | 需求审核 verdict 为 `pass` 时 | 需求/设计/计划文档变更、`AGENTS.md` 变更、审核 prompt 变更、主审 provider 或 model 变更、传 `--no-requirement-audit-cache` | 缓存通过的审核结果，避免上下文未变时重复调用模型。包含 version、cacheKey（基于上下文+prompt+模型信息的哈希）、cachedAt、result。 |
+| `cache/file-contexts.json` | JSON | 收集变更文件上下文后 | 文件 mtime 变更、文件路径变更、maxFileBytes 变更、缓存版本号升级 | 变更文件内容片段的读取缓存，避免重复磁盘 I/O。最多缓存 200 条，超出时按 mtime 降序淘汰。key 格式为 `{version}::{filePath}::{mtime}::{maxFileBytes}`。 |
+
+### `review-context/` 目录
+
+这些文件是**审核流程的输入**，不是输出。它们由用户或 `write-review-context.mjs` 脚本在审核运行前创建。
+
+| 文件 | 用途 | 必需性 |
+| --- | --- | --- |
+| `review-context/current-request.md` | 本次审核的需求上下文。包含：用户原始请求（原文）、用户后续纠正/澄清、当前模型理解（待审核，不是事实）、明确反例/非期望行为、设计结论、非目标、验收标准、建议验证。**必须包含至少 5 个必需章节，否则审核脚本拒绝运行。** | **必需** |
+| `review-context/current-design.md` | 已接受的设计方案摘要。会被纳入审核 brief 供模型判断实现是否符合设计意图。 | 可选 |
+| `review-context/current-plan.md` | 实现计划摘要。同样纳入 brief。 | 可选 |
+
+### 安全提醒
+
+`.ai-review/` 下的文件（特别是 `latest-brief.md`、`runs/` 中的 `brief.md`、`history.jsonl`）可能包含本地代码上下文、diff 片段和文件内容。`.gskills/install.mjs` 会把 `.ai-review` 加入消费项目的 `.gitignore`，防止这些文件被误提交。不要手动将这些文件上传到公开位置。
 
 ## 审核结果结构
 
