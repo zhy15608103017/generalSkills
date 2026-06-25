@@ -1,6 +1,6 @@
 ---
 name: code-review-loop
-description: Use when local code changes, completed feature work, pre-commit checks, or user requests need an external AI code review before considering the work complete.
+description: Use when feature, bug fix, refactor, or other code-bearing local changes need an external AI code review before completion. Do not trigger for docs-only, formatting, comment, typo, lockfile, generated-output, `.ai-review/` artifact, or plain dependency-version-only changes.
 ---
 
 # Code Review Loop
