@@ -23,8 +23,9 @@ node skills/code-review-loop/scripts/ai-review.mjs --profile auto --verify "git 
 ```text
 skills/code-review-loop/
   SKILL.md                         skill 主说明和强制流程
-  .gskills/install.mjs             安装钩子，写入 AGENTS.md、创建或追加 .env 模板、创建 .ai-reviewignore，并把 .ai-review / .ai-reviewignore 加入 .gitignore
+  .gskills/install.mjs             安装钩子，写入 AGENTS.md、创建或追加 .env 模板、清理已安装 skill 副本中的 assets、创建 .ai-reviewignore，并把 .ai-review / .ai-reviewignore 加入 .gitignore
   agents/openai.yaml               agent 元数据
+  assets/env-template.env          安装时写入消费项目 .env 的模板
   references/
     configuration.md               配置说明
     workflow.md                    工作流说明
@@ -161,7 +162,7 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs \
 
 `.env` 只填充当前进程中尚未设置的变量；shell 环境变量会覆盖 `.env`。
 
-安装 `code-review-loop` skill 时，`.gskills/install.mjs` 会把仓库根目录的 `.env copy` 作为模板写入消费项目根目录 `.env`。如果消费项目已经有 `.env`，模板会追加在原内容后；如果已经包含安装模板 marker 或完整模板文本，则不会重复追加。生成到 `.env` 时，所有变量名以 `API_KEY` 结尾的行都会替换为 key 占位符，所有变量名以 `BASE_URL` 结尾的行都会替换为访问地址占位符；其中 `AI_REVIEW_PRIMARY_API_KEY` 使用 `<primary-api-key>`，`AI_REVIEW_SECOND_API_KEY` 使用 `<second-api-key>`，`AI_REVIEW_PRIMARY_BASE_URL` 使用 `<primary-base-url>`，`AI_REVIEW_SECOND_BASE_URL` 使用 `<second-base-url>`，其他 provider 专属 key/address 使用 `<api-key>` / `<base-url>`，避免把真实 key 或内部模型访问地址带入消费项目。
+安装 `code-review-loop` skill 时，`.gskills/install.mjs` 会把 skill 内置的 `assets/env-template.env` 写入消费项目根目录 `.env`，随后删除消费项目中已安装 skill 副本里的 `assets/`；仓库根目录的 `.env copy` 只是本地参考文件，不参与安装。如果消费项目已经有 `.env`，模板会追加在原内容后；如果已经包含安装模板 marker 或完整模板文本，则不会重复追加。生成到 `.env` 时，所有变量名以 `API_KEY` 结尾的行都会替换为 key 占位符，所有变量名以 `BASE_URL` 结尾的行都会替换为访问地址占位符；其中 `AI_REVIEW_PRIMARY_API_KEY` 使用 `<primary-api-key>`，`AI_REVIEW_SECOND_API_KEY` 使用 `<second-api-key>`，`AI_REVIEW_PRIMARY_BASE_URL` 使用 `<primary-base-url>`，`AI_REVIEW_SECOND_BASE_URL` 使用 `<second-base-url>`，其他 provider 专属 key/address 使用 `<api-key>` / `<base-url>`，避免把真实 key 或内部模型访问地址带入消费项目。
 
 ## 参数可选值速查
 

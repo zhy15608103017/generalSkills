@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
 const INSTRUCTIONS = [
   "## AI Code Review",
@@ -8,13 +8,14 @@ const INSTRUCTIONS = [
 ].join("\n");
 const REVIEW_IGNORE_ENTRY = ".ai-review";
 const REVIEW_SCOPE_IGNORE_ENTRY = ".ai-reviewignore";
-const ENV_TEMPLATE_FILE = ".env copy";
+const ENV_TEMPLATE_FILE = path.join("assets", "env-template.env");
 const ENV_TEMPLATE_START = "# gskills:code-review-loop env:start";
 const ENV_TEMPLATE_END = "# gskills:code-review-loop env:end";
 
 export async function install(context) {
   await upsertAgentsBlock(context.destDir, context.skillName, INSTRUCTIONS);
   await ensureEnvTemplate(context.destDir, context.skillDir);
+  await removeInstalledAssets(context.targets || []);
   await ensureGitignoreEntry(context.destDir, REVIEW_IGNORE_ENTRY);
   await ensureGitignoreEntry(context.destDir, REVIEW_SCOPE_IGNORE_ENTRY);
   await ensureReviewIgnoreFile(context.destDir);
@@ -68,8 +69,14 @@ async function ensureEnvTemplate(destDir, skillDir) {
   await writeFile(envPath, updatedText, "utf8");
 }
 
+async function removeInstalledAssets(targets) {
+  for (const target of targets) {
+    await rm(path.join(target.installedPath, "assets"), { recursive: true, force: true });
+  }
+}
+
 async function readEnvTemplate(skillDir) {
-  const templatePath = path.join(skillDir, "..", "..", ENV_TEMPLATE_FILE);
+  const templatePath = path.join(skillDir, ENV_TEMPLATE_FILE);
   const templateText = await readTextIfExists(templatePath);
   if (!templateText) {
     throw new Error(`code-review-loop: missing ${ENV_TEMPLATE_FILE} template.`);
