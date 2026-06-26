@@ -23,7 +23,7 @@ node skills/code-review-loop/scripts/ai-review.mjs --profile auto --verify "git 
 ```text
 skills/code-review-loop/
   SKILL.md                         skill 主说明和强制流程
-  .gskills/install.mjs             安装钩子，写入 AGENTS.md、创建 .ai-reviewignore，并把 .ai-review / .ai-reviewignore 加入 .gitignore
+  .gskills/install.mjs             安装钩子，写入 AGENTS.md、创建或追加 .env 模板、创建 .ai-reviewignore，并把 .ai-review / .ai-reviewignore 加入 .gitignore
   agents/openai.yaml               agent 元数据
   references/
     configuration.md               配置说明
@@ -160,6 +160,35 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs \
 5. 脚本硬编码 fallback。
 
 `.env` 只填充当前进程中尚未设置的变量；shell 环境变量会覆盖 `.env`。
+
+安装 `code-review-loop` skill 时，`.gskills/install.mjs` 会把仓库根目录的 `.env copy` 作为模板写入消费项目根目录 `.env`。如果消费项目已经有 `.env`，模板会追加在原内容后；如果已经包含安装模板 marker 或完整模板文本，则不会重复追加。生成到 `.env` 时，所有变量名以 `API_KEY` 结尾的行都会替换为 key 占位符，所有变量名以 `BASE_URL` 结尾的行都会替换为访问地址占位符；其中 `AI_REVIEW_PRIMARY_API_KEY` 使用 `<primary-api-key>`，`AI_REVIEW_SECOND_API_KEY` 使用 `<second-api-key>`，`AI_REVIEW_PRIMARY_BASE_URL` 使用 `<primary-base-url>`，`AI_REVIEW_SECOND_BASE_URL` 使用 `<second-base-url>`，其他 provider 专属 key/address 使用 `<api-key>` / `<base-url>`，避免把真实 key 或内部模型访问地址带入消费项目。
+
+## 参数可选值速查
+
+| 参数 | 可选值 | 说明 |
+| --- | --- | --- |
+| `AI_REVIEW_PRIMARY_PROVIDER` / `AI_REVIEW_SECOND_PROVIDER` | `deepseek`、`openai`、`mimo`、`xiaomi`、`glm`、`zhipu`、`zai`、`openai-compatible`、`compatible`、`cli`、`local-cli` | 选择主审或二审 provider；`xiaomi` 是 `mimo` alias，`zhipu` / `zai` 是 `glm` alias，`compatible` 是 `openai-compatible` alias，`local-cli` 是 `cli` alias。 |
+| `AI_REVIEW_PRIMARY_MODEL` / `AI_REVIEW_SECOND_MODEL` | provider 支持的模型名，例如 `deepseek-v4-pro`、`gpt-5.5`、`mimo-v2.5-pro`、`glm-5.1`，或自定义网关模型名 | 如果不填，使用 provider 默认模型；也可通过模型名反查 provider。 |
+| `AI_REVIEW_PRIMARY_BASE_URL` / `AI_REVIEW_SECOND_BASE_URL` | 合法 HTTP(S) URL，例如 `https://api.deepseek.com/v1`、`https://api.openai.com/v1`、`https://api.z.ai/api/paas/v4`、内部网关地址；安装模板中使用 `<primary-base-url>` / `<second-base-url>` | 使用内置 provider 默认地址时可省略；`openai-compatible` 通常需要显式配置。 |
+| `AI_REVIEW_PRIMARY_API_KEY` / `AI_REVIEW_SECOND_API_KEY` | 服务商签发的 API key 字符串；模板中使用 `<primary-api-key>` / `<second-api-key>` | 也可改用 provider 专属 key，如 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`MIMO_API_KEY`、`XIAOMI_API_KEY`、`ZAI_API_KEY`、`ZHIPU_API_KEY`、`BIGMODEL_API_KEY`。 |
+| `AI_REVIEW_TRANSPORT` / `AI_REVIEW_SECOND_TRANSPORT` | `openai-compatible`、`responses`、`cli` | `openai-compatible` 调 `/chat/completions`；`responses` 调 OpenAI Responses API；`cli` 执行本地 reviewer 命令。 |
+| `AI_REVIEW_API_STYLE` / `AI_REVIEW_SECOND_API_STYLE` | `chat`、`responses` | OpenAI-compatible Chat Completions 用 `chat`；OpenAI Responses API 用 `responses`。 |
+| `AI_REVIEW_SECOND_REVIEW_MODE` | `auto`、`always`、`off` | `auto` 默认按阈值或低置信度触发二审；`always` 二审可用时始终运行；`off` 关闭二审。 |
+| `AI_REVIEW_SECOND_P0_THRESHOLD` / `AI_REVIEW_SECOND_P1_THRESHOLD` / `AI_REVIEW_SECOND_P2_THRESHOLD` | 非负整数；默认分别为 `1`、`1`、`3` | `auto` 模式下，主审 finding 数量达到对应阈值时触发二审。 |
+| `AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD` | `0` 到 `1` 的数字；默认 `0.8` | `auto` 模式下，主审 `confidence` 低于该值时触发二审。 |
+| `AI_REVIEW_TIMEOUT_MS` / `AI_REVIEW_SECOND_TIMEOUT_MS` | 正整数毫秒；常用 `60000`、`120000`、`180000` | 单次模型请求超时；二审未配置时继承主审预算。 |
+| `AI_REVIEW_RETRIES` / `AI_REVIEW_SECOND_RETRIES` | 非负整数；默认 `3` | 快速失败时的模型重试次数；二审未配置时继承主审预算。 |
+| `AI_REVIEW_RETRY_FAST_FAILURE_MS` / `AI_REVIEW_SECOND_RETRY_FAST_FAILURE_MS` | 非负整数毫秒；默认 `10000` | 单次失败耗时不超过该窗口才会重试。 |
+| `AI_REVIEW_RETRY_DELAY_MS` / `AI_REVIEW_SECOND_RETRY_DELAY_MS` | 非负整数毫秒；默认 `5000` | 每次重试前等待时间。 |
+| `AI_REVIEW_MAX_REVIEW_ROUNDS` | 正整数或 `infinity`；默认 `3` | 审核/修复闭环最大轮数。 |
+| `AI_REVIEW_REASONING_EFFORT` | OpenAI Responses API 支持的 reasoning effort，常用 `low`、`medium`、`high`；默认 `high` | 仅对支持 reasoning effort 的 Responses API 模型有意义。 |
+| `AI_REVIEW_RESPONSE_FORMAT` | `json_object`、`json_schema`，或 provider 支持的响应格式 | Chat Completions 默认通常为 `json_object`；OpenAI Responses provider 默认使用 `json_schema`。 |
+| `AI_REVIEW_STRICT_SCHEMA` / `AI_REVIEW_STRICT_OUTPUT` | `true`、`false` | 控制 Responses API 严格 JSON schema 和本地严格输出校验。 |
+| `AI_REVIEW_THINKING_TYPE` | `enabled`、`disabled`，或 provider 支持的 thinking type | GLM 类 provider 默认可用 `enabled`；网关拒绝 thinking 字段时设为 `disabled`。 |
+| `AI_REVIEW_STREAMING` | `true`、`false`；默认 `false` | Chat Completions 是否使用流式读取。 |
+| `AI_REVIEW_TIME_ZONE` | IANA 时区、固定偏移或 `system`，例如 `Asia/Shanghai`、`UTC`、`+08:00` | 控制报告时间和 run id 时区。 |
+| `AI_REVIEW_HISTORY_LIMIT` | 非负整数；默认 `5`，`0` 表示不保留历史 | 控制 `.ai-review/history.*` 和 `runs/` 保留数量。 |
+| `AI_REVIEW_CLI_COMMAND` / `AI_REVIEW_SECOND_CLI_COMMAND` | 可信本地命令，例如 `reviewer-cli --json` | `transport=cli` 时必需；命令会通过系统 shell 执行。 |
 
 ## 默认上下文与范围配置
 

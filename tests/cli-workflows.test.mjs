@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -402,6 +402,150 @@ test("code-review-loop install hook preserves existing gitignore formatting", as
 
     const gitignoreText = await readFile(path.join(destDir, ".gitignore"), "utf8");
     assert.equal(gitignoreText, `${existingGitignore}.ai-review\n.ai-reviewignore\n`);
+  });
+});
+
+test("code-review-loop install hook creates env template with placeholder keys", async () => {
+  await withTempDir(async (destDir) => {
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const envText = await readFile(path.join(destDir, ".env"), "utf8");
+    assert.match(envText, /AI_REVIEW_PRIMARY_PROVIDER=openai-compatible/);
+    assert.match(envText, /AI_REVIEW_PRIMARY_BASE_URL=<primary-base-url> #地址/);
+    assert.match(envText, /AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
+    assert.match(envText, /AI_REVIEW_SECOND_BASE_URL=<second-base-url>/);
+    assert.match(envText, /AI_REVIEW_SECOND_API_KEY=<second-api-key>/);
+    assert.doesNotMatch(envText, /10\.28\.7\.30|dreamfield\.top|sk-[A-Za-z0-9_-]+/);
+
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const updatedEnvText = await readFile(path.join(destDir, ".env"), "utf8");
+    assert.equal(updatedEnvText, envText);
+  });
+});
+
+test("code-review-loop install hook appends env template to existing env", async () => {
+  await withTempDir(async (destDir) => {
+    await writeFile(path.join(destDir, ".env"), "EXISTING_FLAG=true\n", "utf8");
+
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const envText = await readFile(path.join(destDir, ".env"), "utf8");
+    assert.match(envText, /^EXISTING_FLAG=true\n\n# gskills:code-review-loop env:start\n\n+#主审模型配置/m);
+    assert.match(envText, /AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
+    assert.match(envText, /AI_REVIEW_SECOND_API_KEY=<second-api-key>/);
+
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const updatedEnvText = await readFile(path.join(destDir, ".env"), "utf8");
+    assert.equal(updatedEnvText, envText);
+  });
+});
+
+test("code-review-loop install hook appends template when existing env only has matching keys", async () => {
+  await withTempDir(async (destDir) => {
+    await writeFile(
+      path.join(destDir, ".env"),
+      [
+        "AI_REVIEW_PRIMARY_PROVIDER=openai-compatible",
+        "AI_REVIEW_PRIMARY_MODEL=gpt-5.5",
+        "AI_REVIEW_PRIMARY_BASE_URL=https://gateway.example/v1",
+        "AI_REVIEW_PRIMARY_API_KEY=already-set",
+        "AI_REVIEW_TRANSPORT=openai-compatible",
+        "AI_REVIEW_API_STYLE=chat",
+        "AI_REVIEW_SECOND_PROVIDER=openai-compatible",
+        "AI_REVIEW_SECOND_MODEL=glm-5.2",
+        "AI_REVIEW_SECOND_BASE_URL=https://second.example/v1",
+        "AI_REVIEW_SECOND_API_KEY=already-set",
+        "AI_REVIEW_SECOND_TRANSPORT=openai-compatible",
+        "AI_REVIEW_SECOND_API_STYLE=chat",
+        "AI_REVIEW_SECOND_REVIEW_MODE=auto"
+      ].join("\n"),
+      "utf8"
+    );
+
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const envText = await readFile(path.join(destDir, ".env"), "utf8");
+    assert.match(envText, /# gskills:code-review-loop env:start/);
+    assert.match(envText, /#主审模型配置/);
+    assert.match(envText, /AI_REVIEW_PRIMARY_BASE_URL=<primary-base-url>/);
+    assert.match(envText, /AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
+  });
+});
+
+test("code-review-loop install hook masks provider-specific api keys in env template", async () => {
+  await withTempDir(async (repoDir) => {
+    await cp(
+      path.resolve("skills", "code-review-loop"),
+      path.join(repoDir, "skills", "code-review-loop"),
+      { recursive: true }
+    );
+    await writeFile(
+      path.join(repoDir, ".env copy"),
+      [
+        "AI_REVIEW_PRIMARY_API_KEY=sk-primary-secret",
+        "AI_REVIEW_PRIMARY_BASE_URL=https://primary-secret.example/v1",
+        "AI_REVIEW_SECOND_API_KEY=sk-second-secret",
+        "AI_REVIEW_SECOND_BASE_URL=https://second-secret.example/v1",
+        "OPENAI_API_KEY = sk-openai-secret",
+        "OPENAI_BASE_URL = https://openai-secret.example/v1",
+        "DEEPSEEK_API_KEY=sk-deepseek-secret",
+        " export DEEPSEEK_BASE_URL = https://deepseek-secret.example/v1",
+        " export CUSTOM_GATEWAY_API_KEY = sk-custom-secret",
+        " export CUSTOM_GATEWAY_BASE_URL = https://custom-secret.example/v1"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const destDir = path.join(repoDir, "consumer-project");
+    await installSkills({
+      repoDir,
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const envText = await readFile(path.join(destDir, ".env"), "utf8");
+    assert.match(envText, /AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
+    assert.match(envText, /AI_REVIEW_PRIMARY_BASE_URL=<primary-base-url>/);
+    assert.match(envText, /AI_REVIEW_SECOND_API_KEY=<second-api-key>/);
+    assert.match(envText, /AI_REVIEW_SECOND_BASE_URL=<second-base-url>/);
+    assert.match(envText, /OPENAI_API_KEY = <api-key>/);
+    assert.match(envText, /OPENAI_BASE_URL = <base-url>/);
+    assert.match(envText, /DEEPSEEK_API_KEY=<api-key>/);
+    assert.match(envText, / export DEEPSEEK_BASE_URL = <base-url>/);
+    assert.match(envText, / export CUSTOM_GATEWAY_API_KEY = <api-key>/);
+    assert.match(envText, / export CUSTOM_GATEWAY_BASE_URL = <base-url>/);
+    assert.doesNotMatch(
+      envText,
+      /sk-(primary|second|openai|deepseek|custom)-secret|(primary|second|openai|deepseek|custom)-secret\.example/
+    );
   });
 });
 
