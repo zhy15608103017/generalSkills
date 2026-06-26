@@ -54,9 +54,49 @@
       "responseFormat": "json_object"
     },
     "cli": {
-      "aliases": ["local-cli"],
+      "aliases": [],
       "model": "cli-reviewer",
       "transport": "cli",
+      "apiKeyEnv": [],
+      "baseUrlEnv": [],
+      "timeoutMs": 180000,
+      "retries": 0
+    },
+    "local-cli": {
+      "aliases": ["ai-cli"],
+      "model": "local-cli-reviewer",
+      "transport": "cli",
+      "apiKeyEnv": [],
+      "baseUrlEnv": [],
+      "localCliEnv": [],
+      "timeoutMs": 180000,
+      "retries": 0
+    },
+    "claude-cli": {
+      "aliases": ["claude", "claude-code"],
+      "model": "claude-cli-reviewer",
+      "transport": "cli",
+      "localCli": "claude",
+      "apiKeyEnv": [],
+      "baseUrlEnv": [],
+      "timeoutMs": 180000,
+      "retries": 0
+    },
+    "opencode-cli": {
+      "aliases": ["opencode", "open-code"],
+      "model": "opencode-cli-reviewer",
+      "transport": "cli",
+      "localCli": "opencode",
+      "apiKeyEnv": [],
+      "baseUrlEnv": [],
+      "timeoutMs": 180000,
+      "retries": 0
+    },
+    "codex-cli": {
+      "aliases": ["codex", "codex-local"],
+      "model": "codex-cli-reviewer",
+      "transport": "cli",
+      "localCli": "codex",
       "apiKeyEnv": [],
       "baseUrlEnv": [],
       "timeoutMs": 180000,

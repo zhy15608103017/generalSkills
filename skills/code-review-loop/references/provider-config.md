@@ -21,6 +21,7 @@ Each provider can define:
   "baseUrlEnv": ["EXAMPLE_BASE_URL"],
   "command": "reviewer-cli --json",
   "commandEnv": ["EXAMPLE_REVIEW_CLI_COMMAND"],
+  "localCli": "codex",
   "responseFormat": "json_object",
   "strictSchema": true,
   "strictOutput": false,
@@ -32,7 +33,7 @@ Each provider can define:
 }
 ```
 
-Use `transport: "openai-compatible"` for OpenAI-compatible `/chat/completions` APIs, `transport: "responses"` for OpenAI `/responses`, and `transport: "cli"` for local CLI reviewers that read the review brief from stdin and print JSON to stdout.
+Use `transport: "openai-compatible"` for OpenAI-compatible `/chat/completions` APIs, `transport: "responses"` for OpenAI `/responses`, and `transport: "cli"` for local CLI reviewers. `cli` can run a custom command that reads stdin and prints review-result JSON, or a built-in `localCli` preset for `claude`, `opencode`, or `codex`.
 
 Provider definitions should only contain provider-scoped environment variables, such as `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or `EXAMPLE_BASE_URL`. Do not put runtime routing variables such as `AI_REVIEW_PRIMARY_API_KEY`, `AI_REVIEW_SECOND_API_KEY`, `AI_REVIEW_PRIMARY_BASE_URL`, or `AI_REVIEW_SECOND_BASE_URL` in `model-providers.json`; those are resolved by the review runner.
 
@@ -47,6 +48,8 @@ AI_REVIEW_PRIMARY_BASE_URL=https://api.deepseek.com/v1
 AI_REVIEW_PRIMARY_API_KEY=<key>
 AI_REVIEW_TRANSPORT=openai-compatible
 AI_REVIEW_API_STYLE=chat
+AI_REVIEW_LOCAL_CLI=codex
+AI_REVIEW_LOCAL_CLI_ARGS=<extra trusted args>
 AI_REVIEW_CLI_COMMAND=<command>
 ```
 
@@ -59,6 +62,8 @@ AI_REVIEW_SECOND_BASE_URL=https://api.openai.com/v1
 AI_REVIEW_SECOND_API_KEY=<key>
 AI_REVIEW_SECOND_TRANSPORT=responses
 AI_REVIEW_SECOND_API_STYLE=responses
+AI_REVIEW_SECOND_LOCAL_CLI=claude
+AI_REVIEW_SECOND_LOCAL_CLI_ARGS=<extra trusted args>
 AI_REVIEW_SECOND_CLI_COMMAND=<command>
 AI_REVIEW_SECOND_REVIEW_MODE=auto
 AI_REVIEW_SECOND_P0_THRESHOLD=1
@@ -127,11 +132,15 @@ BIGMODEL_API_KEY=<key>
 - `mimo` or `xiaomi`: Uses an OpenAI-compatible chat completions request. Defaults to model `mimo-v2.5-pro` and base URL `https://api.xiaomimimo.com/v1`.
 - `glm`, `zhipu`, or `zai`: Uses an OpenAI-compatible chat completions request. Defaults to model `glm-5.1` and base URL `https://api.z.ai/api/paas/v4`.
 - `openai-compatible`: Uses chat completions against a custom `AI_REVIEW_PRIMARY_BASE_URL`.
-- `cli` or `local-cli`: Uses a local CLI command. The command must read stdin and return review-result JSON on stdout.
+- `cli`: Uses a trusted custom local CLI command. The command must read stdin and return review-result JSON on stdout.
+- `local-cli` or `ai-cli`: Uses `AI_REVIEW_LOCAL_CLI` to select a built-in local AI CLI preset.
+- `claude-cli` or `claude`: Uses the built-in `claude` preset.
+- `opencode-cli` or `opencode`: Uses the built-in `opencode` preset.
+- `codex-cli` or `codex`: Uses the built-in `codex` preset.
 
 Any additional OpenAI-compatible model can be added by editing `model-providers.json`; no script change is needed when the API uses `/chat/completions`.
 
-Only configure `AI_REVIEW_CLI_COMMAND`, `AI_REVIEW_SECOND_CLI_COMMAND`, `--cli-command`, or `--second-cli-command` from trusted local configuration. CLI reviewer commands are executed through the system shell so quoted commands and local tool wrappers work across platforms.
+Only configure `AI_REVIEW_CLI_COMMAND`, `AI_REVIEW_SECOND_CLI_COMMAND`, `--cli-command`, or `--second-cli-command` from trusted local configuration. Custom CLI reviewer commands are executed through the system shell so quoted commands and local tool wrappers work across platforms. Built-in local CLI presets do not use the shell unless you override them with a custom command.
 
 ## Xiaomi MiMo V2.5 Pro
 
@@ -174,6 +183,8 @@ Use `AI_REVIEW_THINKING_TYPE=disabled` if your GLM-compatible gateway rejects th
 --transport responses|openai-compatible|cli
 --base-url <url>
 --api-style chat|responses
+--local-cli claude|opencode|codex
+--local-cli-args <trusted args>
 --cli-command <command>
 --second-provider <name>
 --second-model <model>
@@ -181,6 +192,8 @@ Use `AI_REVIEW_THINKING_TYPE=disabled` if your GLM-compatible gateway rejects th
 --second-api-key <key>
 --second-api-style chat|responses
 --second-transport responses|openai-compatible|cli
+--second-local-cli claude|opencode|codex
+--second-local-cli-args <trusted args>
 --second-cli-command <command>
 --second-review-mode always|auto|off
 --second-p0-threshold <count>

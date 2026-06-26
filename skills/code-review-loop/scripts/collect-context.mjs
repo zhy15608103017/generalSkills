@@ -104,6 +104,12 @@ export function parseArgs(argv) {
     } else if (arg === "--transport" && next) {
       args.transport = next;
       index += 1;
+    } else if (arg === "--local-cli" && next) {
+      args.localCli = next;
+      index += 1;
+    } else if (arg === "--local-cli-args" && next) {
+      args.localCliArgs = next;
+      index += 1;
     } else if (arg === "--cli-command" && next) {
       args.cliCommand = next;
       index += 1;
@@ -124,6 +130,12 @@ export function parseArgs(argv) {
       index += 1;
     } else if (arg === "--second-transport" && next) {
       args.secondTransport = next;
+      index += 1;
+    } else if (arg === "--second-local-cli" && next) {
+      args.secondLocalCli = next;
+      index += 1;
+    } else if (arg === "--second-local-cli-args" && next) {
+      args.secondLocalCliArgs = next;
       index += 1;
     } else if (arg === "--second-cli-command" && next) {
       args.secondCliCommand = next;

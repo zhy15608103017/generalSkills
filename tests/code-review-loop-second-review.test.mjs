@@ -101,6 +101,24 @@ test("parseArgs accepts second-review timeout, retry, and confidence threshold o
   assert.equal(args.secondConfidenceThreshold, 0.7);
 });
 
+test("parseArgs accepts local CLI preset options", () => {
+  const args = parseArgs([
+    "--local-cli",
+    "codex",
+    "--local-cli-args",
+    "--model gpt-5.5",
+    "--second-local-cli",
+    "claude",
+    "--second-local-cli-args",
+    "--model opus",
+  ]);
+
+  assert.equal(args.localCli, "codex");
+  assert.equal(args.localCliArgs, "--model gpt-5.5");
+  assert.equal(args.secondLocalCli, "claude");
+  assert.equal(args.secondLocalCliArgs, "--model opus");
+});
+
 test("parseArgs accepts configurable review rounds and retry timing options", () => {
   const args = parseArgs([
     "--max-review-rounds",
@@ -158,6 +176,219 @@ test("resolveProviderOptions applies configurable fast-failure retry defaults", 
   assert.equal(resolved.retries, 3);
   assert.equal(resolved.retryFastFailureMs, 10000);
   assert.equal(resolved.retryDelayMs, 5000);
+});
+
+test("resolveProviderOptions can infer local-cli provider from primary local CLI env", () => {
+  const previousProvider = process.env.AI_REVIEW_PRIMARY_PROVIDER;
+  const previousTransport = process.env.AI_REVIEW_TRANSPORT;
+  const previousLocalCli = process.env.AI_REVIEW_LOCAL_CLI;
+  process.env.AI_REVIEW_PRIMARY_PROVIDER = "openai-compatible";
+  process.env.AI_REVIEW_TRANSPORT = "openai-compatible";
+  process.env.AI_REVIEW_LOCAL_CLI = "codex";
+
+  try {
+    const resolved = resolveProviderOptions({}, {
+      defaultProvider: "primary",
+      providers: {
+        primary: {
+          model: "primary-model",
+          baseUrl: "https://primary.example/v1",
+          transport: "openai-compatible",
+        },
+        "local-cli": {
+          model: "local-cli-reviewer",
+          transport: "cli",
+        },
+        "openai-compatible": {
+          model: "api-reviewer",
+          baseUrl: "https://api.example/v1",
+          transport: "openai-compatible",
+        },
+      },
+    });
+
+    assert.equal(resolved.provider, "local-cli");
+    assert.equal(resolved.transport, "cli");
+    assert.equal(resolved.localCli, "codex");
+    assert.equal(resolved.cliCommand, undefined);
+  } finally {
+    if (previousProvider === undefined) {
+      delete process.env.AI_REVIEW_PRIMARY_PROVIDER;
+    } else {
+      process.env.AI_REVIEW_PRIMARY_PROVIDER = previousProvider;
+    }
+    if (previousTransport === undefined) {
+      delete process.env.AI_REVIEW_TRANSPORT;
+    } else {
+      process.env.AI_REVIEW_TRANSPORT = previousTransport;
+    }
+    if (previousLocalCli === undefined) {
+      delete process.env.AI_REVIEW_LOCAL_CLI;
+    } else {
+      process.env.AI_REVIEW_LOCAL_CLI = previousLocalCli;
+    }
+  }
+});
+
+test("resolveProviderOptions maps built-in CLI provider aliases to local presets", () => {
+  const resolved = resolveProviderOptions({ provider: "claude" }, {
+    defaultProvider: "primary",
+    providers: {
+      primary: {
+        model: "primary-model",
+        baseUrl: "https://primary.example/v1",
+        transport: "openai-compatible",
+      },
+      "claude-cli": {
+        aliases: ["claude"],
+        model: "claude-cli-reviewer",
+        transport: "cli",
+        localCli: "claude",
+      },
+    },
+  });
+
+  assert.equal(resolved.provider, "claude-cli");
+  assert.equal(resolved.transport, "cli");
+  assert.equal(resolved.localCli, "claude");
+});
+
+test("resolveProviderOptions lets legacy CLI command override env CLI provider presets", () => {
+  const previousProvider = process.env.AI_REVIEW_PRIMARY_PROVIDER;
+  const previousCliCommand = process.env.AI_REVIEW_CLI_COMMAND;
+  const previousTransport = process.env.AI_REVIEW_TRANSPORT;
+  process.env.AI_REVIEW_PRIMARY_PROVIDER = "claude";
+  process.env.AI_REVIEW_CLI_COMMAND = "legacy-reviewer --json";
+  delete process.env.AI_REVIEW_TRANSPORT;
+
+  try {
+    const resolved = resolveProviderOptions({}, {
+      defaultProvider: "openai-compatible",
+      providers: {
+        "openai-compatible": {
+          model: "api-reviewer",
+          baseUrl: "https://api.example/v1",
+          transport: "openai-compatible",
+        },
+        "claude-cli": {
+          aliases: ["claude"],
+          model: "claude-cli-reviewer",
+          transport: "cli",
+          localCli: "claude",
+        },
+        cli: {
+          model: "cli-reviewer",
+          transport: "cli",
+        },
+      },
+    });
+
+    assert.equal(resolved.provider, "claude-cli");
+    assert.equal(resolved.transport, "cli");
+    assert.equal(resolved.localCli, "claude");
+    assert.equal(resolved.cliCommand, "legacy-reviewer --json");
+  } finally {
+    if (previousProvider === undefined) {
+      delete process.env.AI_REVIEW_PRIMARY_PROVIDER;
+    } else {
+      process.env.AI_REVIEW_PRIMARY_PROVIDER = previousProvider;
+    }
+    if (previousCliCommand === undefined) {
+      delete process.env.AI_REVIEW_CLI_COMMAND;
+    } else {
+      process.env.AI_REVIEW_CLI_COMMAND = previousCliCommand;
+    }
+    if (previousTransport === undefined) {
+      delete process.env.AI_REVIEW_TRANSPORT;
+    } else {
+      process.env.AI_REVIEW_TRANSPORT = previousTransport;
+    }
+  }
+});
+
+test("resolveProviderOptions does not let legacy CLI command override env API provider", () => {
+  const previousProvider = process.env.AI_REVIEW_PRIMARY_PROVIDER;
+  const previousCliCommand = process.env.AI_REVIEW_CLI_COMMAND;
+  const previousTransport = process.env.AI_REVIEW_TRANSPORT;
+  process.env.AI_REVIEW_PRIMARY_PROVIDER = "openai-compatible";
+  process.env.AI_REVIEW_CLI_COMMAND = "legacy-reviewer --json";
+  delete process.env.AI_REVIEW_TRANSPORT;
+
+  try {
+    const resolved = resolveProviderOptions({}, {
+      defaultProvider: "openai-compatible",
+      providers: {
+        "openai-compatible": {
+          model: "api-reviewer",
+          baseUrl: "https://api.example/v1",
+          transport: "openai-compatible",
+        },
+        cli: {
+          model: "cli-reviewer",
+          transport: "cli",
+        },
+      },
+    });
+
+    assert.equal(resolved.provider, "openai-compatible");
+    assert.equal(resolved.transport, "openai-compatible");
+    assert.equal(resolved.cliCommand, undefined);
+  } finally {
+    if (previousProvider === undefined) {
+      delete process.env.AI_REVIEW_PRIMARY_PROVIDER;
+    } else {
+      process.env.AI_REVIEW_PRIMARY_PROVIDER = previousProvider;
+    }
+    if (previousCliCommand === undefined) {
+      delete process.env.AI_REVIEW_CLI_COMMAND;
+    } else {
+      process.env.AI_REVIEW_CLI_COMMAND = previousCliCommand;
+    }
+    if (previousTransport === undefined) {
+      delete process.env.AI_REVIEW_TRANSPORT;
+    } else {
+      process.env.AI_REVIEW_TRANSPORT = previousTransport;
+    }
+  }
+});
+
+test("resolveProviderOptions still uses legacy CLI command when env provider is cli", () => {
+  const previousProvider = process.env.AI_REVIEW_PRIMARY_PROVIDER;
+  const previousCliCommand = process.env.AI_REVIEW_CLI_COMMAND;
+  process.env.AI_REVIEW_PRIMARY_PROVIDER = "cli";
+  process.env.AI_REVIEW_CLI_COMMAND = "legacy-reviewer --json";
+
+  try {
+    const resolved = resolveProviderOptions({}, {
+      defaultProvider: "openai-compatible",
+      providers: {
+        "openai-compatible": {
+          model: "api-reviewer",
+          baseUrl: "https://api.example/v1",
+          transport: "openai-compatible",
+        },
+        cli: {
+          model: "cli-reviewer",
+          transport: "cli",
+        },
+      },
+    });
+
+    assert.equal(resolved.provider, "cli");
+    assert.equal(resolved.transport, "cli");
+    assert.equal(resolved.cliCommand, "legacy-reviewer --json");
+  } finally {
+    if (previousProvider === undefined) {
+      delete process.env.AI_REVIEW_PRIMARY_PROVIDER;
+    } else {
+      process.env.AI_REVIEW_PRIMARY_PROVIDER = previousProvider;
+    }
+    if (previousCliCommand === undefined) {
+      delete process.env.AI_REVIEW_CLI_COMMAND;
+    } else {
+      process.env.AI_REVIEW_CLI_COMMAND = previousCliCommand;
+    }
+  }
 });
 
 test("buildSecondReviewOptions inherits the effective primary review budget by default", () => {
@@ -224,6 +455,69 @@ test("buildSecondReviewOptions lets explicit second-review budget override defau
   assert.equal(secondOptions.retries, 1);
   assert.equal(secondOptions.retryFastFailureMs, 3000);
   assert.equal(secondOptions.retryDelayMs, 10);
+});
+
+test("buildSecondReviewOptions routes second local CLI without extra provider flags", () => {
+  const secondOptions = buildSecondReviewOptions(
+    parseArgs([
+      "--provider",
+      "primary",
+      "--second-local-cli",
+      "opencode",
+      "--second-local-cli-args",
+      "--model qwen",
+    ]),
+    providersConfig,
+  );
+
+  assert.equal(secondOptions.provider, "local-cli");
+  assert.equal(secondOptions.transport, "cli");
+  assert.equal(secondOptions.localCli, "opencode");
+  assert.equal(secondOptions.localCliArgs, "--model qwen");
+});
+
+test("second local CLI provider aliases do not inherit primary API routing options", () => {
+  const config = {
+    defaultProvider: "openai-compatible",
+    providers: {
+      "openai-compatible": {
+        model: "api-model",
+        baseUrl: "https://api.example/v1",
+        transport: "openai-compatible",
+        apiStyle: "chat",
+      },
+      "claude-cli": {
+        aliases: ["claude"],
+        model: "claude-cli-reviewer",
+        transport: "cli",
+        localCli: "claude",
+      },
+    },
+  };
+  const secondOptions = buildSecondReviewOptions(
+    parseArgs([
+      "--provider",
+      "openai-compatible",
+      "--model",
+      "api-model",
+      "--base-url",
+      "https://api.example/v1",
+      "--transport",
+      "openai-compatible",
+      "--api-style",
+      "chat",
+      "--second-provider",
+      "claude",
+    ]),
+    config,
+  );
+  const resolved = resolveProviderOptions(secondOptions, config);
+
+  assert.equal(resolved.provider, "claude-cli");
+  assert.equal(resolved.transport, "cli");
+  assert.equal(resolved.localCli, "claude");
+  assert.equal(resolved.model, "claude-cli-reviewer");
+  assert.equal(resolved.baseUrl, "");
 });
 
 test("shouldRunSecondReview triggers auto mode when primary confidence is below threshold", () => {

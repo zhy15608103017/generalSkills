@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseReviewResult } from "./review-result.mjs";
@@ -59,10 +60,25 @@ export async function loadEnvFile(root, fileName = ".env") {
 
 export function resolveProviderOptions(options = {}, providersConfig = loadFallbackProvidersConfig()) {
   const usePrimaryEnv = options.usePrimaryEnv !== false;
+  const explicitLocalCli = options.localCli;
+  const explicitCliCommand = options.cliCommand;
+  const envLocalCli = usePrimaryEnv ? process.env.AI_REVIEW_LOCAL_CLI : undefined;
+  const envCliCommand = usePrimaryEnv ? process.env.AI_REVIEW_CLI_COMMAND : undefined;
+  const requestedLocalCli =
+    explicitLocalCli ||
+    envLocalCli;
+  const requestedCliCommand =
+    explicitCliCommand ||
+    envCliCommand;
   const requestedModel = options.model || (usePrimaryEnv ? process.env.AI_REVIEW_PRIMARY_MODEL : undefined);
+  const envProvider = usePrimaryEnv ? process.env.AI_REVIEW_PRIMARY_PROVIDER : undefined;
   const providerName =
+    (explicitLocalCli ? "local-cli" : undefined) ||
+    (explicitCliCommand ? "cli" : undefined) ||
     options.provider ||
-    (usePrimaryEnv ? process.env.AI_REVIEW_PRIMARY_PROVIDER : undefined) ||
+    (envLocalCli ? "local-cli" : undefined) ||
+    envProvider ||
+    (envCliCommand ? "cli" : undefined) ||
     inferProviderFromModel(requestedModel, providersConfig) ||
     providersConfig.defaultProvider ||
     "deepseek";
@@ -78,6 +94,15 @@ export function resolveProviderOptions(options = {}, providersConfig = loadFallb
     "chat";
   const transport =
     options.transport ||
+    (shouldForceCliTransport({
+      providerConfig,
+      explicitLocalCli,
+      explicitCliCommand,
+      envLocalCli,
+      envCliCommand,
+      envProvider,
+      options,
+    }) ? "cli" : undefined) ||
     (usePrimaryEnv ? process.env.AI_REVIEW_TRANSPORT : undefined) ||
     providerConfig.transport ||
     (apiStyle === "responses" ? "responses" : "openai-compatible");
@@ -86,11 +111,23 @@ export function resolveProviderOptions(options = {}, providersConfig = loadFallb
     (usePrimaryEnv ? process.env.AI_REVIEW_PRIMARY_BASE_URL : undefined) ||
     firstEnvValue(providerScopedEnvNames(providerConfig.baseUrlEnv)) ||
     providerConfig.baseUrl;
+  const envCliCommandApplies = !envProvider || providerConfig.transport === "cli";
   const cliCommand =
-    options.cliCommand ||
-    (usePrimaryEnv ? process.env.AI_REVIEW_CLI_COMMAND : undefined) ||
+    explicitCliCommand ||
+    (envCliCommandApplies ? envCliCommand : undefined) ||
     firstEnvValue(providerScopedEnvNames(providerConfig.commandEnv)) ||
     providerConfig.command;
+  const localCli = normalizeLocalCliName(
+    requestedLocalCli ||
+    firstEnvValue(providerScopedEnvNames(providerConfig.localCliEnv)) ||
+    providerConfig.localCli,
+  );
+  const localCliArgs =
+    options.localCliArgs ||
+    (usePrimaryEnv ? process.env.AI_REVIEW_LOCAL_CLI_ARGS : undefined) ||
+    firstEnvValue(providerScopedEnvNames(providerConfig.localCliArgsEnv)) ||
+    providerConfig.localCliArgs ||
+    "";
   const apiKey =
     options.apiKey ||
     (usePrimaryEnv ? process.env.AI_REVIEW_PRIMARY_API_KEY : undefined) ||
@@ -133,6 +170,8 @@ export function resolveProviderOptions(options = {}, providersConfig = loadFallb
     baseUrl: baseUrl ? baseUrl.replace(/\/$/, "") : "",
     apiKey,
     cliCommand,
+    localCli,
+    localCliArgs,
     reasoningEffort: process.env.AI_REVIEW_REASONING_EFFORT || "high",
     responseFormat: process.env.AI_REVIEW_RESPONSE_FORMAT || providerConfig.responseFormat || "json_object",
     requestOptions: providerConfig.requestOptions || {},
@@ -265,13 +304,15 @@ async function callResponsesApi({ brief, systemPrompt, schema, providerOptions }
 }
 
 async function callCliReviewer({ brief, systemPrompt, schema, providerOptions }) {
-  if (!providerOptions.cliCommand) {
+  if (!providerOptions.cliCommand && !providerOptions.localCli) {
     throw new Error(`Missing CLI command for provider "${providerOptions.provider}".`);
   }
 
   const input = renderCliInput(brief, systemPrompt, toReviewerSchema(schema));
   const { stdout, stderr } = await runModelOperationWithRetry(
-    () => runCliCommand(providerOptions.cliCommand, input, providerOptions.timeoutMs),
+    () => providerOptions.cliCommand
+      ? runCliCommand(providerOptions.cliCommand, input, providerOptions.timeoutMs)
+      : runLocalCliPreset(providerOptions.localCli, input, providerOptions),
     providerOptions,
   );
   const content = stdout.trim() || stderr.trim();
@@ -352,6 +393,160 @@ function runCliCommand(command, input, timeoutMs) {
     });
     child.stdin.end(input);
   });
+}
+
+function shouldForceCliTransport({
+  providerConfig,
+  explicitLocalCli,
+  explicitCliCommand,
+  envLocalCli,
+  envCliCommand,
+  envProvider,
+  options = {},
+}) {
+  if (providerConfig.transport === "cli") return true;
+  if (explicitLocalCli || explicitCliCommand) return true;
+  if (options.provider) return false;
+  if (envLocalCli) return true;
+  if (envProvider) return false;
+  return Boolean(envCliCommand);
+}
+
+async function runLocalCliPreset(localCli, input, providerOptions) {
+  const invocation = buildLocalCliInvocation(localCli, providerOptions.localCliArgs);
+  if (invocation.promptFile) {
+    return withTempPromptFile(input, (promptFile) => runCliProcess({
+      ...invocation,
+      args: invocation.args.map((arg) => arg === "{promptFile}" ? promptFile : arg),
+      input: "",
+      timeoutMs: providerOptions.timeoutMs,
+    }));
+  }
+
+  return runCliProcess({
+    ...invocation,
+    input,
+    timeoutMs: providerOptions.timeoutMs,
+  });
+}
+
+export function buildLocalCliInvocation(localCli, extraArgs = "") {
+  const normalized = normalizeLocalCliName(localCli);
+  const extras = splitShellWords(extraArgs);
+  const instruction = "Review the provided code review brief. Return exactly one JSON object that conforms to the schema in the brief. Do not edit files.";
+
+  if (normalized === "claude") {
+    return {
+      command: "claude",
+      args: ["-p", "--output-format", "text", ...extras],
+      displayCommand: ["claude", "-p", "--output-format", "text", ...extras].map(quoteDisplayArg).join(" "),
+    };
+  }
+
+  if (normalized === "codex") {
+    const args = ["exec", "--color", "never", "--ephemeral", ...extras, instruction];
+    return {
+      command: "codex",
+      args,
+      displayCommand: ["codex", ...args].map(quoteDisplayArg).join(" "),
+    };
+  }
+
+  if (normalized === "opencode") {
+    const args = ["run", "--file", "{promptFile}", ...extras, instruction];
+    return {
+      command: "opencode",
+      args,
+      displayCommand: ["opencode", ...args].map(quoteDisplayArg).join(" "),
+      promptFile: true,
+    };
+  }
+
+  throw new Error(`Unsupported local CLI preset "${localCli}". Use claude, opencode, codex, or configure AI_REVIEW_CLI_COMMAND.`);
+}
+
+function runCliProcess({ command, args, input, timeoutMs, displayCommand }) {
+  return new Promise((resolve, reject) => {
+    const invocation = buildCliProcessInvocation(command, args);
+    const child = spawn(invocation.command, invocation.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(annotateReviewError(new Error(`CLI reviewer timed out after ${timeoutMs}ms.`), {
+        timeoutMs,
+        attempts: 1,
+        source: "cli",
+      }));
+    }, timeoutMs);
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      if (error?.code === "ENOENT") {
+        reject(annotateReviewError(new Error(`CLI reviewer command was not found: ${invocation.display}`), {
+          source: "cli",
+          attempts: 1,
+        }));
+        return;
+      }
+      reject(annotateReviewError(error, { source: "cli", attempts: 1 }));
+    });
+    child.on("close", (exitCode) => {
+      clearTimeout(timeout);
+      if (exitCode !== 0) {
+        reject(annotateReviewError(new Error(`CLI reviewer failed (${exitCode}): ${stderr || stdout || displayCommand || invocation.display}`), {
+          source: "cli",
+          attempts: 1,
+          exitCode,
+        }));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+    child.stdin.end(input);
+  });
+}
+
+export function buildCliProcessInvocation(command, args = []) {
+  if (process.platform === "win32") {
+    const commandLine = [command, ...args].map(quoteCmdArg).join(" ");
+    return {
+      command: process.env.ComSpec || "cmd.exe",
+      args: ["/d", "/s", "/c", `"${commandLine}"`],
+      display: commandLine,
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return {
+    command,
+    args,
+    display: [command, ...args].map(quoteDisplayArg).join(" "),
+    windowsVerbatimArguments: false,
+  };
+}
+
+async function withTempPromptFile(input, callback) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-review-loop-cli-"));
+  const promptFile = path.join(tempDir, "review-brief.md");
+  try {
+    await fs.writeFile(promptFile, input, "utf8");
+    return await callback(promptFile);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 function renderUserContent(brief, schema) {
@@ -536,7 +731,7 @@ function reviewErrorCategory({ error, message, status, source, code }) {
   if (status === 401 || status === 403) return "auth";
   if (status === 429) return "rate_limit";
   if (typeof status === "number" && status >= 500) return "server";
-  if (/missing api key|missing base url|unknown provider|missing cli command|command was not found/.test(normalized)) return "config";
+  if (/missing api key|missing base url|unknown provider|missing cli command|command was not found|unsupported local cli preset/.test(normalized)) return "config";
   if (/reviewer response did not contain valid json|reviewer returned an empty response|schema errors?/.test(normalized)) return "bad_response";
   if (source === "cli" || /cli reviewer/.test(normalized)) return "cli";
   if (
@@ -620,6 +815,73 @@ function resolveProvider(providerName, providersConfig) {
   }
 
   throw new Error(`Unknown provider "${providerName}". Add it to references/model-providers.json.`);
+}
+
+function normalizeLocalCliName(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (["claude-code", "claude_code"].includes(normalized)) return "claude";
+  if (["open-code", "open_code"].includes(normalized)) return "opencode";
+  if (["codex-cli", "codex_cli"].includes(normalized)) return "codex";
+  return normalized;
+}
+
+function splitShellWords(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return [];
+
+  const words = [];
+  let current = "";
+  let quote = "";
+  let escaped = false;
+
+  for (const char of text) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        words.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (escaped) current += "\\";
+  if (current) words.push(current);
+  return words;
+}
+
+function quoteCmdArg(value) {
+  const text = String(value).replace(/%/g, "%%");
+  if (!/[\s&()^|<>"]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function quoteDisplayArg(value) {
+  const text = String(value);
+  if (!/[\s"]/.test(text)) return text;
+  return `"${text.replace(/"/g, "\\\"")}"`;
 }
 
 function firstEnvValue(names = []) {

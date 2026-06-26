@@ -168,7 +168,7 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs \
 
 | 参数 | 可选值 | 说明 |
 | --- | --- | --- |
-| `AI_REVIEW_PRIMARY_PROVIDER` / `AI_REVIEW_SECOND_PROVIDER` | `deepseek`、`openai`、`mimo`、`xiaomi`、`glm`、`zhipu`、`zai`、`openai-compatible`、`compatible`、`cli`、`local-cli` | 选择主审或二审 provider；`xiaomi` 是 `mimo` alias，`zhipu` / `zai` 是 `glm` alias，`compatible` 是 `openai-compatible` alias，`local-cli` 是 `cli` alias。 |
+| `AI_REVIEW_PRIMARY_PROVIDER` / `AI_REVIEW_SECOND_PROVIDER` | `deepseek`、`openai`、`mimo`、`xiaomi`、`glm`、`zhipu`、`zai`、`openai-compatible`、`compatible`、`cli`、`local-cli`、`claude-cli`、`claude`、`opencode-cli`、`opencode`、`codex-cli`、`codex` | 选择主审或二审 provider；`cli` 运行自定义命令，`local-cli` 通过 `AI_REVIEW_LOCAL_CLI` 选择内置本地 AI CLI preset，`claude`/`opencode`/`codex` 是快捷 provider。 |
 | `AI_REVIEW_PRIMARY_MODEL` / `AI_REVIEW_SECOND_MODEL` | provider 支持的模型名，例如 `deepseek-v4-pro`、`gpt-5.5`、`mimo-v2.5-pro`、`glm-5.1`，或自定义网关模型名 | 如果不填，使用 provider 默认模型；也可通过模型名反查 provider。 |
 | `AI_REVIEW_PRIMARY_BASE_URL` / `AI_REVIEW_SECOND_BASE_URL` | 合法 HTTP(S) URL，例如 `https://api.deepseek.com/v1`、`https://api.openai.com/v1`、`https://api.z.ai/api/paas/v4`、内部网关地址；安装模板中使用 `<primary-base-url>` / `<second-base-url>` | 使用内置 provider 默认地址时可省略；`openai-compatible` 通常需要显式配置。 |
 | `AI_REVIEW_PRIMARY_API_KEY` / `AI_REVIEW_SECOND_API_KEY` | 服务商签发的 API key 字符串；模板中使用 `<primary-api-key>` / `<second-api-key>` | 也可改用 provider 专属 key，如 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`MIMO_API_KEY`、`XIAOMI_API_KEY`、`ZAI_API_KEY`、`ZHIPU_API_KEY`、`BIGMODEL_API_KEY`。 |
@@ -189,7 +189,9 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs \
 | `AI_REVIEW_STREAMING` | `true`、`false`；默认 `false` | Chat Completions 是否使用流式读取。 |
 | `AI_REVIEW_TIME_ZONE` | IANA 时区、固定偏移或 `system`，例如 `Asia/Shanghai`、`UTC`、`+08:00` | 控制报告时间和 run id 时区。 |
 | `AI_REVIEW_HISTORY_LIMIT` | 非负整数；默认 `5`，`0` 表示不保留历史 | 控制 `.ai-review/history.*` 和 `runs/` 保留数量。 |
-| `AI_REVIEW_CLI_COMMAND` / `AI_REVIEW_SECOND_CLI_COMMAND` | 可信本地命令，例如 `reviewer-cli --json` | `transport=cli` 时必需；命令会通过系统 shell 执行。 |
+| `AI_REVIEW_LOCAL_CLI` / `AI_REVIEW_SECOND_LOCAL_CLI` | `claude`、`opencode`、`codex` | `provider=local-cli` 时选择本地已安装的 AI CLI preset；也可直接用 `provider=claude`、`provider=opencode`、`provider=codex`。 |
+| `AI_REVIEW_LOCAL_CLI_ARGS` / `AI_REVIEW_SECOND_LOCAL_CLI_ARGS` | 本地 CLI 的额外可信参数，例如 `--model opus`、`--model qwen` | 追加到内置 preset 命令中；不同 CLI 支持的参数以各自 CLI 为准。 |
+| `AI_REVIEW_CLI_COMMAND` / `AI_REVIEW_SECOND_CLI_COMMAND` | 可信本地命令，例如 `reviewer-cli --json` | 裸 `cli` 模式或覆盖 preset 时使用；命令会通过系统 shell 执行，并且必须读 stdin、输出审核 JSON。 |
 
 ## 默认上下文与范围配置
 
@@ -293,7 +295,11 @@ retries=3
 | `mimo` | `xiaomi` | `mimo-v2.5-pro` | `openai-compatible` | `chat` | `https://api.xiaomimimo.com/v1` | `MIMO_API_KEY`, `XIAOMI_API_KEY` |
 | `glm` | `zhipu`, `zai` | `glm-5.1` | `openai-compatible` | `chat` | `https://api.z.ai/api/paas/v4` | `ZAI_API_KEY`, `ZHIPU_API_KEY`, `BIGMODEL_API_KEY` |
 | `openai-compatible` | `compatible` | `gpt-5.5` | `openai-compatible` | `chat` | `https://api.openai.com/v1` | 无内置 key env |
-| `cli` | `local-cli` | `cli-reviewer` | `cli` | 无 | 无 | 无，使用 command |
+| `cli` | 无 | `cli-reviewer` | `cli` | 无 | 无 | 无，使用 command |
+| `local-cli` | `ai-cli` | `local-cli-reviewer` | `cli` | 无 | 无 | 无，使用 `AI_REVIEW_LOCAL_CLI` |
+| `claude-cli` | `claude`, `claude-code` | `claude-cli-reviewer` | `cli` | 无 | 无 | 无，调用本地 `claude` preset |
+| `opencode-cli` | `opencode`, `open-code` | `opencode-cli-reviewer` | `cli` | 无 | 无 | 无，调用本地 `opencode` preset |
+| `codex-cli` | `codex`, `codex-local` | `codex-cli-reviewer` | `cli` | 无 | 无 | 无，调用本地 `codex` preset |
 
 `provider` 也可以通过 model 名反查。例如只设置 `AI_REVIEW_SECOND_MODEL=mimo-v2.5-pro` 时，会优先匹配 `model-providers.json` 中相同 model 的 provider，再读取该 provider 的 key。
 
@@ -302,8 +308,8 @@ retries=3
 二审在 `ai-review.mjs` 中解析。关键点：
 
 - `AI_REVIEW_SECOND_API_KEY` 只提供凭证，单独设置不会启用二审。
-- 需要至少设置一个二审路由字段：provider、model、baseUrl、apiStyle、transport 或 cliCommand。
-- 配置存在后，还必须经过 `resolveProviderOptions` 判断可用。API transport 需要 baseUrl 和 apiKey；CLI transport 需要 cliCommand。
+- 需要至少设置一个二审路由字段：provider、model、baseUrl、apiStyle、transport、localCli 或 cliCommand。
+- 配置存在后，还必须经过 `resolveProviderOptions` 判断可用。API transport 需要 baseUrl 和 apiKey；CLI transport 需要 cliCommand 或 localCli preset。
 - 二审会设置 `usePrimaryEnv=false`，避免误用主审专属环境变量。
 
 | 配置 | CLI | 环境变量 | 默认值 | 作用 |
@@ -314,7 +320,8 @@ retries=3
 | API key | `--second-api-key` | `AI_REVIEW_SECOND_API_KEY` 或 provider key env | 无 | 二审凭证 |
 | transport | `--second-transport` | `AI_REVIEW_SECOND_TRANSPORT` | 主审 transport 或 provider 默认 | 二审调用方式 |
 | API style | `--second-api-style` | `AI_REVIEW_SECOND_API_STYLE` | 主审 apiStyle 或 provider 默认 | 二审 API 风格 |
-| CLI command | `--second-cli-command` | `AI_REVIEW_SECOND_CLI_COMMAND` | 主审 cliCommand 或 provider 默认 | 二审 CLI reviewer |
+| local CLI | `--second-local-cli` | `AI_REVIEW_SECOND_LOCAL_CLI` | 主审 localCli 或 provider 默认 | 二审本地 AI CLI preset |
+| CLI command | `--second-cli-command` | `AI_REVIEW_SECOND_CLI_COMMAND` | 主审 cliCommand 或 provider 默认 | 二审自定义 CLI reviewer |
 | mode | `--second-review-mode` | `AI_REVIEW_SECOND_REVIEW_MODE` | `auto` | 二审运行模式 |
 | P0 阈值 | `--second-p0-threshold` | `AI_REVIEW_SECOND_P0_THRESHOLD` | `1` | auto 模式触发阈值 |
 | P1 阈值 | `--second-p1-threshold` | `AI_REVIEW_SECOND_P1_THRESHOLD` | `1` | auto 模式触发阈值 |
@@ -637,7 +644,34 @@ AI_REVIEW_TRANSPORT=cli
 AI_REVIEW_CLI_COMMAND=reviewer-cli --json
 ```
 
-只应从可信配置里设置 CLI command，因为它会通过系统 shell 执行。
+本地 AI CLI preset：
+
+```env
+AI_REVIEW_PRIMARY_PROVIDER=local-cli
+AI_REVIEW_LOCAL_CLI=codex
+
+AI_REVIEW_SECOND_PROVIDER=local-cli
+AI_REVIEW_SECOND_LOCAL_CLI=claude
+AI_REVIEW_SECOND_REVIEW_MODE=always
+```
+
+也可以直接用快捷 provider：
+
+```env
+AI_REVIEW_PRIMARY_PROVIDER=opencode
+AI_REVIEW_SECOND_PROVIDER=claude
+AI_REVIEW_SECOND_REVIEW_MODE=always
+```
+
+当前内置 preset 为：
+
+| preset | 调用方式 |
+| --- | --- |
+| `claude` | 执行 `claude -p --output-format text`，把审核 brief 写入 stdin。 |
+| `codex` | 执行 `codex exec --color never --ephemeral <instruction>`，把审核 brief 写入 stdin。 |
+| `opencode` | 把审核 brief 写入临时文件，执行 `opencode run --file <prompt-file> <instruction>`。 |
+
+如果某个本地 CLI 版本的参数不同，使用 `AI_REVIEW_LOCAL_CLI_ARGS` / `AI_REVIEW_SECOND_LOCAL_CLI_ARGS` 追加模型等参数；如果调用形态完全不同，则改用 `AI_REVIEW_CLI_COMMAND` / `AI_REVIEW_SECOND_CLI_COMMAND` 作为兜底。只应从可信配置里设置 CLI command，因为它会通过系统 shell 执行。
 
 ## 故障排查
 

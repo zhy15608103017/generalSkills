@@ -91,6 +91,7 @@ off:     只运行 PRIMARY
 - 或设置 `AI_REVIEW_SECOND_BASE_URL`
 - 或设置 `AI_REVIEW_SECOND_TRANSPORT`
 - 或设置 `AI_REVIEW_SECOND_API_STYLE`
+- 或设置 `AI_REVIEW_SECOND_LOCAL_CLI`
 - 或设置 `AI_REVIEW_SECOND_CLI_COMMAND`
 
 `AI_REVIEW_SECOND_API_KEY` 只提供凭证，单独设置它不会启用第二轮审核。
@@ -175,6 +176,8 @@ AI_REVIEW_SECOND_BASE_URL=<url>
 AI_REVIEW_SECOND_API_KEY=<key>
 AI_REVIEW_SECOND_TRANSPORT=responses
 AI_REVIEW_SECOND_API_STYLE=responses
+AI_REVIEW_SECOND_LOCAL_CLI=claude
+AI_REVIEW_SECOND_LOCAL_CLI_ARGS=<trusted-args>
 ```
 
 含义：
@@ -186,6 +189,8 @@ AI_REVIEW_SECOND_BASE_URL      第二模型 API base URL
 AI_REVIEW_SECOND_API_KEY       第二模型 API key
 AI_REVIEW_SECOND_TRANSPORT     第二模型传输方式
 AI_REVIEW_SECOND_API_STYLE     第二模型 API 风格
+AI_REVIEW_SECOND_LOCAL_CLI     第二模型本地 AI CLI preset，可选 claude、opencode、codex
+AI_REVIEW_SECOND_LOCAL_CLI_ARGS 第二模型本地 AI CLI 额外可信参数
 AI_REVIEW_SECOND_CLI_COMMAND   第二模型 CLI 命令
 AI_REVIEW_SECOND_REVIEW_MODE   第二模型运行模式：always、auto、off
 AI_REVIEW_SECOND_P0_THRESHOLD  auto 模式下 P0 触发阈值，默认 1
@@ -215,6 +220,8 @@ AI_REVIEW_RESPONSE_FORMAT=json_object
 AI_REVIEW_STRICT_SCHEMA=true
 AI_REVIEW_STRICT_OUTPUT=false
 AI_REVIEW_THINKING_TYPE=enabled
+AI_REVIEW_LOCAL_CLI=codex
+AI_REVIEW_LOCAL_CLI_ARGS=<trusted-args>
 AI_REVIEW_CLI_COMMAND=<command>
 AI_REVIEW_TIME_ZONE=Asia/Shanghai
 AI_REVIEW_HISTORY_LIMIT=5
@@ -235,6 +242,8 @@ AI_REVIEW_RESPONSE_FORMAT    输出格式
 AI_REVIEW_STRICT_SCHEMA      Responses API 是否启用严格 JSON schema
 AI_REVIEW_STRICT_OUTPUT      本地是否严格校验审核结果结构；默认 false，设为 true 时启用强校验
 AI_REVIEW_THINKING_TYPE      兼容部分支持 thinking 字段的模型
+AI_REVIEW_LOCAL_CLI          主模型本地 AI CLI preset，可选 claude、opencode、codex
+AI_REVIEW_LOCAL_CLI_ARGS     主模型本地 AI CLI 额外可信参数
 AI_REVIEW_CLI_COMMAND        主模型 CLI 审核命令
 AI_REVIEW_TIME_ZONE          审核产物时间时区；不设置时使用当前环境时区，支持 IANA 名称或 +08:00 这类固定偏移，显示格式为 YYYY-MM-DD hh:mm:ss
 AI_REVIEW_HISTORY_LIMIT      历史审核保留条数；默认 5，设为 0 时不保留历史运行目录和历史索引条目
@@ -299,6 +308,12 @@ zai
 openai-compatible
 cli
 local-cli
+claude-cli
+claude
+opencode-cli
+opencode
+codex-cli
+codex
 ```
 
 ## Provider 示例
@@ -386,6 +401,44 @@ AI_REVIEW_SECOND_CLI_COMMAND=reviewer-cli --json
 ```
 
 注意：CLI 命令会通过系统 shell 执行，只能配置来自可信来源的命令。
+
+### Local AI CLI Reviewer
+
+调用本机已安装的 `claude`、`opencode` 或 `codex`，无需为每个 CLI 写包装脚本：
+
+```env
+AI_REVIEW_PRIMARY_PROVIDER=local-cli
+AI_REVIEW_LOCAL_CLI=codex
+
+AI_REVIEW_SECOND_PROVIDER=local-cli
+AI_REVIEW_SECOND_LOCAL_CLI=claude
+AI_REVIEW_SECOND_REVIEW_MODE=always
+```
+
+也可以使用快捷 provider：
+
+```env
+AI_REVIEW_PRIMARY_PROVIDER=opencode
+AI_REVIEW_SECOND_PROVIDER=claude
+AI_REVIEW_SECOND_REVIEW_MODE=always
+```
+
+内置 preset：
+
+```text
+claude    执行 claude -p --output-format text，审核 brief 通过 stdin 传入
+codex     执行 codex exec --color never --ephemeral <instruction>，审核 brief 通过 stdin 传入
+opencode  将审核 brief 写入临时文件，执行 opencode run --file <prompt-file> <instruction>
+```
+
+如需指定本地 CLI 模型或 profile，可追加可信参数：
+
+```env
+AI_REVIEW_LOCAL_CLI_ARGS=--model <model>
+AI_REVIEW_SECOND_LOCAL_CLI_ARGS=--model <model>
+```
+
+如果某个 CLI 版本的非交互参数和内置 preset 不一致，改用 `AI_REVIEW_CLI_COMMAND` / `AI_REVIEW_SECOND_CLI_COMMAND` 作为兜底。
 
 ## 命令行覆盖
 

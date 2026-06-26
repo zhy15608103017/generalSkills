@@ -11,7 +11,11 @@ import {
   runRequirementAudit,
   runReviewPasses,
 } from "../skills/code-review-loop/scripts/ai-review.mjs";
-import { callReviewModel } from "../skills/code-review-loop/scripts/call-model.mjs";
+import {
+  buildCliProcessInvocation,
+  buildLocalCliInvocation,
+  callReviewModel,
+} from "../skills/code-review-loop/scripts/call-model.mjs";
 import {
   buildHistoryEntry,
   renderHistoryMarkdownEntry,
@@ -399,6 +403,45 @@ test("classifyReviewError categorizes common model invocation failures", async (
 
   const cli = new Error("CLI reviewer failed (2): nope");
   assert.equal(classifyReviewError(cli).category, "cli");
+});
+
+test("buildLocalCliInvocation creates built-in local AI CLI preset commands", () => {
+  const claude = buildLocalCliInvocation("claude", "--model opus");
+  assert.equal(claude.command, "claude");
+  assert.deepEqual(claude.args, ["-p", "--output-format", "text", "--model", "opus"]);
+
+  const codex = buildLocalCliInvocation("codex", "--model \"gpt 5\"");
+  assert.equal(codex.command, "codex");
+  assert.deepEqual(codex.args.slice(0, 4), ["exec", "--color", "never", "--ephemeral"]);
+  assert.deepEqual(codex.args.slice(4, 6), ["--model", "gpt 5"]);
+  assert.match(codex.args.at(-1), /Return exactly one JSON object/);
+
+  const opencode = buildLocalCliInvocation("opencode");
+  assert.equal(opencode.command, "opencode");
+  assert.equal(opencode.promptFile, true);
+  assert.deepEqual(opencode.args.slice(0, 3), ["run", "--file", "{promptFile}"]);
+});
+
+test("buildLocalCliInvocation rejects unknown local CLI presets", () => {
+  assert.throws(
+    () => buildLocalCliInvocation("unknown-cli"),
+    /Unsupported local CLI preset/,
+  );
+});
+
+test("buildCliProcessInvocation wraps local CLI commands for Windows shims", () => {
+  const invocation = buildCliProcessInvocation("codex", ["exec", "--model", "gpt 5"]);
+
+  if (process.platform === "win32") {
+    assert.match(invocation.command, /cmd\.exe$/i);
+    assert.deepEqual(invocation.args.slice(0, 3), ["/d", "/s", "/c"]);
+    assert.match(invocation.args[3], /codex exec --model "gpt 5"/);
+    assert.equal(invocation.windowsVerbatimArguments, true);
+  } else {
+    assert.equal(invocation.command, "codex");
+    assert.deepEqual(invocation.args, ["exec", "--model", "gpt 5"]);
+    assert.equal(invocation.windowsVerbatimArguments, false);
+  }
 });
 
 test("callReviewModel retries retryable fast failures with configured defaults", async () => {

@@ -431,6 +431,10 @@ test("code-review-loop install hook creates env template with placeholder keys",
 
     const updatedEnvText = await readFile(path.join(destDir, ".env"), "utf8");
     assert.equal(updatedEnvText, envText);
+    await assert.rejects(
+      () => stat(path.join(destDir, ".agents", "skills", "code-review-loop", "assets")),
+      /ENOENT/
+    );
   });
 });
 
@@ -507,7 +511,7 @@ test("code-review-loop install hook masks provider-specific api keys in env temp
       { recursive: true }
     );
     await writeFile(
-      path.join(repoDir, ".env copy"),
+      path.join(repoDir, "skills", "code-review-loop", "assets", "env-template.env"),
       [
         "AI_REVIEW_PRIMARY_API_KEY=sk-primary-secret",
         "AI_REVIEW_PRIMARY_BASE_URL=https://primary-secret.example/v1",

@@ -576,12 +576,16 @@ export function buildSecondReviewOptions(options, providersConfig) {
     apiKey: options.secondApiKey || readEnv("AI_REVIEW_SECOND_API_KEY"),
     apiStyle: options.secondApiStyle || readEnv("AI_REVIEW_SECOND_API_STYLE"),
     transport: options.secondTransport || readEnv("AI_REVIEW_SECOND_TRANSPORT"),
+    localCli: options.secondLocalCli || readEnv("AI_REVIEW_SECOND_LOCAL_CLI"),
+    localCliArgs: options.secondLocalCliArgs || readEnv("AI_REVIEW_SECOND_LOCAL_CLI_ARGS"),
     cliCommand: options.secondCliCommand || readEnv("AI_REVIEW_SECOND_CLI_COMMAND"),
   };
 
   if (!isSecondReviewerConfigured(secondConfig)) {
     return null;
   }
+
+  const secondUsesCli = secondReviewerUsesCli(secondConfig, providersConfig);
 
   return {
     ...options,
@@ -599,13 +603,15 @@ export function buildSecondReviewOptions(options, providersConfig) {
       readEnv("AI_REVIEW_SECOND_RETRY_DELAY_MS"),
       inheritedRetryDelayMs,
     ),
-    provider: secondConfig.provider || (secondConfig.model ? undefined : options.provider),
-    model: secondConfig.model || options.model,
-    baseUrl: secondConfig.baseUrl || options.baseUrl,
-    apiKey: secondConfig.apiKey || options.apiKey,
-    apiStyle: secondConfig.apiStyle || options.apiStyle,
-    transport: secondConfig.transport || options.transport,
-    cliCommand: secondConfig.cliCommand || options.cliCommand,
+    provider: secondConfig.provider || secondReviewerCliProvider(secondConfig, options),
+    model: secondConfig.model || (secondUsesCli ? undefined : options.model),
+    baseUrl: secondConfig.baseUrl || (secondUsesCli ? undefined : options.baseUrl),
+    apiKey: secondConfig.apiKey || (secondUsesCli ? undefined : options.apiKey),
+    apiStyle: secondConfig.apiStyle || (secondUsesCli ? undefined : options.apiStyle),
+    transport: secondConfig.transport || secondReviewerCliTransport(secondConfig, options, secondUsesCli),
+    localCli: secondConfig.localCli || (secondUsesCli ? undefined : options.localCli),
+    localCliArgs: secondConfig.localCliArgs || (secondUsesCli ? undefined : options.localCliArgs),
+    cliCommand: secondConfig.cliCommand || (secondUsesCli ? undefined : options.cliCommand),
   };
 }
 
@@ -663,13 +669,14 @@ function isSecondReviewerConfigured(config) {
     config.baseUrl ||
     config.apiStyle ||
     config.transport ||
+    config.localCli ||
     config.cliCommand
   );
 }
 
 function assertUsableProviderConfig(providerOptions) {
   if (providerOptions.transport === "cli") {
-    if (!providerOptions.cliCommand) {
+    if (!providerOptions.cliCommand && !providerOptions.localCli) {
       throw new Error(`Missing CLI command for provider "${providerOptions.provider}".`);
     }
     return;
@@ -680,6 +687,33 @@ function assertUsableProviderConfig(providerOptions) {
   if (!providerOptions.apiKey) {
     throw new Error(`Missing API key for provider "${providerOptions.provider}".`);
   }
+}
+
+function secondReviewerCliProvider(config, options = {}) {
+  if (config.localCli) return "local-cli";
+  if (config.cliCommand) return "cli";
+  return config.model ? undefined : options.provider;
+}
+
+function secondReviewerCliTransport(config, options = {}, secondUsesCli = secondReviewerUsesCli(config)) {
+  if (secondUsesCli) return "cli";
+  return options.transport;
+}
+
+function secondReviewerUsesCli(config, providersConfig = null) {
+  return Boolean(
+    config.localCli ||
+    config.cliCommand ||
+    isCliProviderName(config.provider, providersConfig)
+  );
+}
+
+function isCliProviderName(providerName, providersConfig = null) {
+  if (!providerName || !providersConfig) return false;
+  const providers = providersConfig.providers || {};
+  const provider = providers[providerName] ||
+    Object.values(providers).find((config) => (config.aliases || []).includes(providerName));
+  return provider?.transport === "cli";
 }
 
 function meetsSecondReviewThreshold(result, options) {
