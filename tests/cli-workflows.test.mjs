@@ -311,7 +311,9 @@ test("canonical AGENTS reminders are installed by skill hooks", async () => {
     const agentsText = await readFile(path.join(destDir, "AGENTS.md"), "utf8");
     assert.match(agentsText, /<!-- gskills:start code-review-loop -->/);
     assert.match(agentsText, /## AI Code Review/);
-    assert.match(agentsText, /fix blocking `P0\/P1` findings/);
+    assert.match(agentsText, /code-bearing local changes/);
+    assert.match(agentsText, /Skip docs-only/);
+    assert.match(agentsText, /Fix blocking `P0\/P1` findings/);
     assert.match(agentsText, /<!-- gskills:end code-review-loop -->/);
     assert.match(agentsText, /<!-- gskills:start generate-maintainable-code -->/);
     assert.match(agentsText, /## Code Generation/);

@@ -4,11 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 const INSTRUCTIONS = [
   "## AI Code Review",
   "",
-  "For feature, bug fix, refactor, or other code-bearing local changes, use the `code-review-loop` skill before reporting completion. Create `.ai-review/review-context/current-request.md`, run verification and the review loop, fix blocking `P0/P1` findings, and clearly report any review setup failure.",
-  "",
-  "The review/fix loop defaults to at most 3 review rounds. Configure the limit with `AI_REVIEW_MAX_REVIEW_ROUNDS` or `--max-review-rounds`; use `infinity` only when an explicitly unbounded loop is intended.",
-  "",
-  "Skip the review for changes unlikely to carry code-review signal: docs/README/CHANGELOG-only edits, whitespace/formatting, comments, typo fixes, lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `*-lock.*`), generated output (`dist/`, `build/`, `*.snap`), `.ai-review/` artifacts, and plain dependency-version bumps. When unsure whether a change qualifies, ask the user before running the review."
+  "For feature, bug fix, refactor, or other code-bearing local changes, use the `code-review-loop` skill before reporting completion. Skip docs-only, formatting-only, comments-only, typo-only, lockfile-only, generated-output, `.ai-review/` artifact, and plain dependency-version-only changes. Fix blocking `P0/P1` findings or report review setup failure."
 ].join("\n");
 const REVIEW_IGNORE_ENTRY = ".ai-review";
 const REVIEW_SCOPE_IGNORE_ENTRY = ".ai-reviewignore";
