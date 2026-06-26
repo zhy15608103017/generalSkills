@@ -20,6 +20,7 @@ import {
   buildHistoryEntry,
   renderHistoryMarkdownEntry,
 } from "../skills/code-review-loop/scripts/review-display.mjs";
+import { parseReviewResult } from "../skills/code-review-loop/scripts/review-result.mjs";
 import {
   buildRequirementAuditCacheKey,
   loadRequirementAuditorPrompt,
@@ -220,6 +221,47 @@ test("runReviewPasses retries malformed reviewer output with the configured retr
   assert.equal(attempts, 4);
   assert.equal(reviewRun.result.verdict, "pass");
   assert.equal(reviewRun.result.summary, "malformed recovered");
+});
+
+test("runReviewPasses retries JSON syntax errors from malformed reviewer output", async () => {
+  let attempts = 0;
+
+  const reviewRun = await runReviewPasses({
+    brief: "brief",
+    assets: { systemPrompt: "prompt", schema: {}, providersConfig },
+    options: {
+      provider: "primary",
+      retries: 2,
+      retryDelayMs: 0,
+      retryFastFailureMs: 10000,
+    },
+    primaryResolved: { provider: "primary", model: "primary-model" },
+    secondResolved: null,
+    callReviewModelFn: async () => {
+      attempts += 1;
+      if (attempts <= 2) {
+        return parseReviewResult('{"verdict":"pass" "summary":"missing comma"}');
+      }
+      return passResult({ summary: "syntax recovered" });
+    },
+  });
+
+  assert.equal(attempts, 3);
+  assert.equal(reviewRun.result.verdict, "pass");
+  assert.equal(reviewRun.result.summary, "syntax recovered");
+});
+
+test("parseReviewResult reports malformed JSON with parser detail and output preview", () => {
+  assert.throws(
+    () => parseReviewResult('Claude says:\n{"verdict":"pass" "summary":"missing comma"}\nThanks'),
+    (error) => {
+      assert.match(error.message, /^Reviewer response did not contain valid JSON\./);
+      assert.match(error.message, /Parse error:/);
+      assert.match(error.message, /Output preview:/);
+      assert.match(error.message, /missing comma/);
+      return true;
+    },
+  );
 });
 
 for (const scenario of [

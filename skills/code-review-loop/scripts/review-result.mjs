@@ -148,14 +148,33 @@ function extractJson(text) {
 
   try {
     return JSON.parse(cleaned);
-  } catch {
+  } catch (directError) {
     const start = cleaned.indexOf("{");
     const end = cleaned.lastIndexOf("}");
     if (start >= 0 && end > start) {
-      return JSON.parse(cleaned.slice(start, end + 1));
+      const candidate = cleaned.slice(start, end + 1);
+      try {
+        return JSON.parse(candidate);
+      } catch (candidateError) {
+        throw malformedJsonError(candidateError, candidate);
+      }
     }
-    throw new Error("Reviewer response did not contain valid JSON.");
+    throw malformedJsonError(directError, cleaned);
   }
+}
+
+function malformedJsonError(parseError, content) {
+  const parseMessage = parseError?.message ? ` Parse error: ${parseError.message}.` : "";
+  const preview = outputPreview(content);
+  const previewMessage = preview ? ` Output preview: ${preview}` : "";
+  return new Error(`Reviewer response did not contain valid JSON.${parseMessage}${previewMessage}`);
+}
+
+function outputPreview(content) {
+  const normalized = String(content || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  const truncated = normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
+  return JSON.stringify(truncated);
 }
 
 const validVerdicts = new Set(["pass", "fail", "needs_human"]);
