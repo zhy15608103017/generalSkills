@@ -5,7 +5,7 @@ const HIGH_ACCURACY_OPTIONS = {
   maxFileBytes: 200000,
   maxDiffBytes: 800000,
   timeoutMs: 180000,
-  retries: 2,
+  retries: 3,
 };
 
 const GENERIC_HIGH_RISK_PATH_PATTERNS = [

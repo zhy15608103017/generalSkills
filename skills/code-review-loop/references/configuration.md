@@ -64,10 +64,13 @@ AI_REVIEW_SECOND_P1_THRESHOLD=1
 AI_REVIEW_SECOND_P2_THRESHOLD=3
 AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD=0.8
 AI_REVIEW_SECOND_TIMEOUT_MS=60000
-AI_REVIEW_SECOND_RETRIES=0
+AI_REVIEW_SECOND_RETRIES=3
 
 AI_REVIEW_TIMEOUT_MS=180000
-AI_REVIEW_RETRIES=2
+AI_REVIEW_RETRIES=3
+AI_REVIEW_RETRY_FAST_FAILURE_MS=10000
+AI_REVIEW_RETRY_DELAY_MS=5000
+AI_REVIEW_MAX_REVIEW_ROUNDS=3
 ```
 
 审核方式：
@@ -117,12 +120,12 @@ AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD=0.8
 
 `auto` 模式下，主模型返回的 P0/P1/P2 数量达到阈值，或主审 `confidence` 小于 `AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD`，都会触发二审。默认置信度阈值是 `0.8`。
 
-二审模型默认继承主审当前已生效的请求预算，包括 `high-accuracy` profile、`--timeout-ms`、`--retries` 或对应环境变量带来的覆盖。
+二审模型默认继承主审当前已生效的请求预算，包括 `high-accuracy` profile、`--timeout-ms`、`--retries`、`--retry-fast-failure-ms`、`--retry-delay-ms` 或对应环境变量带来的覆盖。
 
 也就是说：
 
 - 如果主审因为 `high-accuracy` 使用了更长超时，二审默认也会继承这组预算。
-- 如果显式设置了 `--second-timeout-ms` / `AI_REVIEW_SECOND_TIMEOUT_MS` 或 `--second-retries` / `AI_REVIEW_SECOND_RETRIES`，则二审使用自己的独立值。
+- 如果显式设置了 `--second-timeout-ms` / `AI_REVIEW_SECOND_TIMEOUT_MS`、`--second-retries` / `AI_REVIEW_SECOND_RETRIES`、`--second-retry-fast-failure-ms` / `AI_REVIEW_SECOND_RETRY_FAST_FAILURE_MS` 或 `--second-retry-delay-ms` / `AI_REVIEW_SECOND_RETRY_DELAY_MS`，则二审使用自己的独立值。
 
 例如可以单独给二审更长预算：
 
@@ -131,7 +134,7 @@ AI_REVIEW_SECOND_TIMEOUT_MS=180000
 AI_REVIEW_SECOND_RETRIES=1
 ```
 
-如果设置了 `--second-timeout-ms` / `AI_REVIEW_SECOND_TIMEOUT_MS` 或 `--second-retries` / `AI_REVIEW_SECOND_RETRIES`，会覆盖继承来的预算。
+如果设置了 `--second-timeout-ms` / `AI_REVIEW_SECOND_TIMEOUT_MS`、`--second-retries` / `AI_REVIEW_SECOND_RETRIES`、`--second-retry-fast-failure-ms` / `AI_REVIEW_SECOND_RETRY_FAST_FAILURE_MS` 或 `--second-retry-delay-ms` / `AI_REVIEW_SECOND_RETRY_DELAY_MS`，会覆盖继承来的预算。
 
 优先级：
 
@@ -189,8 +192,10 @@ AI_REVIEW_SECOND_P0_THRESHOLD  auto 模式下 P0 触发阈值，默认 1
 AI_REVIEW_SECOND_P1_THRESHOLD  auto 模式下 P1 触发阈值，默认 1
 AI_REVIEW_SECOND_P2_THRESHOLD  auto 模式下 P2 触发阈值，默认 3
 AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD auto 模式主模型低置信度触发阈值，默认 0.8
-AI_REVIEW_SECOND_TIMEOUT_MS    第二模型单次请求超时时间，默认 60000
-AI_REVIEW_SECOND_RETRIES       第二模型请求重试次数，默认 0
+AI_REVIEW_SECOND_TIMEOUT_MS    第二模型单次请求超时时间，默认继承主审预算
+AI_REVIEW_SECOND_RETRIES       第二模型请求重试次数，默认继承主审预算
+AI_REVIEW_SECOND_RETRY_FAST_FAILURE_MS 第二模型快速失败重试窗口毫秒数，默认继承主模型
+AI_REVIEW_SECOND_RETRY_DELAY_MS 第二模型每次重试前等待毫秒数，默认继承主模型
 ```
 
 第二模型会隔离主模型环境变量，不会误用 `AI_REVIEW_PRIMARY_BASE_URL`、`AI_REVIEW_PRIMARY_API_KEY`、`AI_REVIEW_TRANSPORT` 或 `AI_REVIEW_API_STYLE`。
@@ -201,7 +206,10 @@ AI_REVIEW_SECOND_RETRIES       第二模型请求重试次数，默认 0
 AI_REVIEW_TRANSPORT=openai-compatible
 AI_REVIEW_API_STYLE=chat
 AI_REVIEW_TIMEOUT_MS=120000
-AI_REVIEW_RETRIES=1
+AI_REVIEW_RETRIES=3
+AI_REVIEW_RETRY_FAST_FAILURE_MS=10000
+AI_REVIEW_RETRY_DELAY_MS=5000
+AI_REVIEW_MAX_REVIEW_ROUNDS=3
 AI_REVIEW_REASONING_EFFORT=high
 AI_REVIEW_RESPONSE_FORMAT=json_object
 AI_REVIEW_STRICT_SCHEMA=true
@@ -218,7 +226,10 @@ AI_REVIEW_HISTORY_LIMIT=5
 AI_REVIEW_TRANSPORT          主模型传输方式
 AI_REVIEW_API_STYLE          主模型 API 风格
 AI_REVIEW_TIMEOUT_MS         单次模型请求超时时间
-AI_REVIEW_RETRIES            模型请求重试次数
+AI_REVIEW_RETRIES            模型快速失败重试次数，默认 3
+AI_REVIEW_RETRY_FAST_FAILURE_MS 仅当单次失败耗时不超过该值时才重试，默认 10000
+AI_REVIEW_RETRY_DELAY_MS     每次重试前等待毫秒数，默认 5000
+AI_REVIEW_MAX_REVIEW_ROUNDS  审核/修复闭环最大轮数，默认 3；设为 infinity 表示无上限
 AI_REVIEW_REASONING_EFFORT   Responses API 推理强度
 AI_REVIEW_RESPONSE_FORMAT    输出格式
 AI_REVIEW_STRICT_SCHEMA      Responses API 是否启用严格 JSON schema
@@ -401,13 +412,20 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --second-review-mode 
 覆盖超时和重试：
 
 ```bash
-node .agents/skills/code-review-loop/scripts/ai-review.mjs --timeout-ms 180000 --retries 2
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --timeout-ms 180000 --retries 3 --retry-fast-failure-ms 10000 --retry-delay-ms 5000
+```
+
+覆盖审核/修复闭环最大轮数：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --max-review-rounds 5
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --max-review-rounds infinity
 ```
 
 覆盖二审的独立超时、重试和 auto 置信度阈值：
 
 ```bash
-node .agents/skills/code-review-loop/scripts/ai-review.mjs --second-timeout-ms 60000 --second-retries 0 --second-confidence-threshold 0.8
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --second-timeout-ms 60000 --second-retries 3 --second-retry-fast-failure-ms 10000 --second-retry-delay-ms 5000 --second-confidence-threshold 0.8
 ```
 
 启用 CodeGraph 影响上下文：
@@ -434,7 +452,10 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --codegraph --codegra
 AI_REVIEW_PRIMARY_PROVIDER=deepseek
 AI_REVIEW_PRIMARY_MODEL=deepseek-v4-pro
 AI_REVIEW_TIMEOUT_MS=120000
-AI_REVIEW_RETRIES=1
+AI_REVIEW_RETRIES=3
+AI_REVIEW_RETRY_FAST_FAILURE_MS=10000
+AI_REVIEW_RETRY_DELAY_MS=5000
+AI_REVIEW_MAX_REVIEW_ROUNDS=3
 ```
 
 提交前高准确性：
@@ -451,7 +472,9 @@ AI_REVIEW_SECOND_P0_THRESHOLD=1
 AI_REVIEW_SECOND_P1_THRESHOLD=1
 AI_REVIEW_SECOND_P2_THRESHOLD=3
 AI_REVIEW_TIMEOUT_MS=180000
-AI_REVIEW_RETRIES=2
+AI_REVIEW_RETRIES=3
+AI_REVIEW_RETRY_FAST_FAILURE_MS=10000
+AI_REVIEW_RETRY_DELAY_MS=5000
 ```
 
 企业内部网关：
@@ -553,11 +576,13 @@ AI_REVIEW_SECOND_PROVIDER=openai
 
 ```env
 AI_REVIEW_TIMEOUT_MS=180000
-AI_REVIEW_RETRIES=2
+AI_REVIEW_RETRIES=3
+AI_REVIEW_RETRY_FAST_FAILURE_MS=10000
+AI_REVIEW_RETRY_DELAY_MS=5000
 ```
 
 或命令行覆盖：
 
 ```bash
---timeout-ms 180000 --retries 2
+--timeout-ms 180000 --retries 3 --retry-fast-failure-ms 10000 --retry-delay-ms 5000
 ```

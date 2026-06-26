@@ -14,6 +14,9 @@ export {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const skillDir = path.dirname(scriptDir);
 const assetsCache = new AssetsCacheManager(60000);
+const DEFAULT_RETRIES = 3;
+const DEFAULT_RETRY_FAST_FAILURE_MS = 10000;
+const DEFAULT_RETRY_DELAY_MS = 5000;
 
 export async function loadReviewerAssets() {
   const cacheKey = `assets-${skillDir}`;
@@ -102,7 +105,19 @@ export function resolveProviderOptions(options = {}, providersConfig = loadFallb
     options.retries,
     process.env.AI_REVIEW_RETRIES,
     providerConfig.retries,
-    1,
+    DEFAULT_RETRIES,
+  );
+  const retryFastFailureMs = positiveNumber(
+    options.retryFastFailureMs,
+    process.env.AI_REVIEW_RETRY_FAST_FAILURE_MS,
+    providerConfig.retryFastFailureMs,
+    DEFAULT_RETRY_FAST_FAILURE_MS,
+  );
+  const retryDelayMs = nonNegativeNumber(
+    options.retryDelayMs,
+    process.env.AI_REVIEW_RETRY_DELAY_MS,
+    providerConfig.retryDelayMs,
+    DEFAULT_RETRY_DELAY_MS,
   );
 
   if (transport !== "cli" && !baseUrl) {
@@ -125,6 +140,8 @@ export function resolveProviderOptions(options = {}, providersConfig = loadFallb
     strictOutput: booleanValue(process.env.AI_REVIEW_STRICT_OUTPUT, providerConfig.strictOutput, false),
     timeoutMs,
     retries,
+    retryFastFailureMs,
+    retryDelayMs,
   };
 }
 
@@ -253,7 +270,10 @@ async function callCliReviewer({ brief, systemPrompt, schema, providerOptions })
   }
 
   const input = renderCliInput(brief, systemPrompt, toReviewerSchema(schema));
-  const { stdout, stderr } = await runCliCommand(providerOptions.cliCommand, input, providerOptions.timeoutMs);
+  const { stdout, stderr } = await runModelOperationWithRetry(
+    () => runCliCommand(providerOptions.cliCommand, input, providerOptions.timeoutMs),
+    providerOptions,
+  );
   const content = stdout.trim() || stderr.trim();
   return parseReviewResult(content, { strict: providerOptions.strictOutput });
 }
@@ -348,10 +368,7 @@ ${JSON.stringify(schema, null, 2)}
 }
 
 async function fetchJsonWithRetry(url, requestOptions, providerOptions, streaming = false) {
-  let lastError;
-  const attempts = providerOptions.retries + 1;
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  return runModelOperationWithRetry(async () => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), providerOptions.timeoutMs);
     try {
@@ -363,26 +380,50 @@ async function fetchJsonWithRetry(url, requestOptions, providerOptions, streamin
         return await readStreamResponse(response);
       }
       return await readJsonResponse(response);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }, providerOptions);
+}
+
+async function runModelOperationWithRetry(operation, providerOptions) {
+  let lastError;
+  const attempts = providerOptions.retries + 1;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const startedAt = Date.now();
+    try {
+      return await operation();
     } catch (error) {
       lastError = error;
+      const elapsedMs = Date.now() - startedAt;
       annotateReviewError(error, {
         attempts: attempt,
         timeoutMs: providerOptions.timeoutMs,
       });
-      if (attempt >= attempts || !isRetryableModelError(error)) {
+      if (!shouldRetryModelError(error, {
+        attempt,
+        attempts,
+        elapsedMs,
+        providerOptions,
+      })) {
         throw error;
       }
-      const waitMs = Math.min(1000 * 2 ** (attempt - 1), 5000);
+      const waitMs = providerOptions.retryDelayMs;
       process.stderr.write(
-        `Model request retry ${attempt}/${attempts - 1} after ${error.message}; waiting ${waitMs}ms\n`,
+        `Model request retry ${attempt}/${attempts - 1} after ${error.message}; failed after ${elapsedMs}ms; waiting ${waitMs}ms\n`,
       );
-      await delay(waitMs);
-    } finally {
-      clearTimeout(timeout);
+      if (waitMs > 0) await delay(waitMs);
     }
   }
 
   throw lastError;
+}
+
+function shouldRetryModelError(error, { attempt, attempts, elapsedMs, providerOptions }) {
+  if (attempt >= attempts) return false;
+  if (!isRetryableModelError(error)) return false;
+  return elapsedMs <= providerOptions.retryFastFailureMs;
 }
 
 async function readJsonResponse(response) {
@@ -458,7 +499,7 @@ function isRetryableModelError(error) {
   if (typeof error?.status === "number") {
     return error.status === 429 || error.status >= 500;
   }
-  return false;
+  return classifyReviewError(error).retryable;
 }
 
 export function classifyReviewError(error = {}) {

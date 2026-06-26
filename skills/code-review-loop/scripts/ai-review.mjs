@@ -6,6 +6,8 @@ import {
   getGitRoot,
   parseArgs,
   renderReviewBrief,
+  resolveMaxReviewRounds,
+  resolveReviewLimits,
 } from "./collect-context.mjs";
 import {
   callReviewModel,
@@ -36,12 +38,15 @@ import { assertRequestContext } from "./request-context.mjs";
 import { renderMarkdownReport } from "./review-report.mjs";
 import { formatReviewRunId } from "./time-format.mjs";
 
+export { resolveMaxReviewRounds };
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const root = await getGitRoot();
   await assertRequestContext(root, options);
   const context = await collectReviewContext(options);
   await loadEnvFile(context.root);
+  context.reviewLimits = resolveReviewLimits(options);
   const brief = renderReviewBrief(context);
   const outDir = path.resolve(context.root, options.outDir || ".ai-review");
   await fs.mkdir(outDir, { recursive: true });
@@ -549,7 +554,19 @@ export function buildSecondReviewOptions(options, providersConfig) {
     options.retries,
     readEnv("AI_REVIEW_RETRIES"),
     inheritedPrimaryBudget?.retries,
-    1,
+    3,
+  );
+  const inheritedRetryFastFailureMs = positiveNumber(
+    options.retryFastFailureMs,
+    readEnv("AI_REVIEW_RETRY_FAST_FAILURE_MS"),
+    inheritedPrimaryBudget?.retryFastFailureMs,
+    10000,
+  );
+  const inheritedRetryDelayMs = nonNegativeInteger(
+    options.retryDelayMs,
+    readEnv("AI_REVIEW_RETRY_DELAY_MS"),
+    inheritedPrimaryBudget?.retryDelayMs,
+    5000,
   );
 
   const secondConfig = {
@@ -572,6 +589,16 @@ export function buildSecondReviewOptions(options, providersConfig) {
     secondReviewMode,
     timeoutMs: positiveNumber(options.secondTimeoutMs, readEnv("AI_REVIEW_SECOND_TIMEOUT_MS"), inheritedTimeoutMs),
     retries: nonNegativeInteger(options.secondRetries, readEnv("AI_REVIEW_SECOND_RETRIES"), inheritedRetries),
+    retryFastFailureMs: positiveNumber(
+      options.secondRetryFastFailureMs,
+      readEnv("AI_REVIEW_SECOND_RETRY_FAST_FAILURE_MS"),
+      inheritedRetryFastFailureMs,
+    ),
+    retryDelayMs: nonNegativeInteger(
+      options.secondRetryDelayMs,
+      readEnv("AI_REVIEW_SECOND_RETRY_DELAY_MS"),
+      inheritedRetryDelayMs,
+    ),
     provider: secondConfig.provider || (secondConfig.model ? undefined : options.provider),
     model: secondConfig.model || options.model,
     baseUrl: secondConfig.baseUrl || options.baseUrl,
@@ -737,14 +764,59 @@ function readEnv(name) {
 }
 
 async function callReviewModelWithMalformedRetry(reviewOptions, callReviewModelFn = callReviewModel) {
-  try {
-    return await callReviewModelFn(reviewOptions);
-  } catch (error) {
-    if (!isMalformedReviewerOutput(error)) {
-      throw error;
+  const retryBudget = resolveReviewerRetryBudget(reviewOptions);
+  const attempts = retryBudget.retries + 1;
+  let lastError;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const startedAt = Date.now();
+    try {
+      return await callReviewModelFn(reviewOptions);
+    } catch (error) {
+      lastError = annotateReviewerAttempt(error, attempt);
+      const elapsedMs = Date.now() - startedAt;
+      if (
+        !isMalformedReviewerOutput(error) ||
+        attempt >= attempts ||
+        elapsedMs > retryBudget.retryFastFailureMs
+      ) {
+        throw error;
+      }
+      const waitMs = retryBudget.retryDelayMs;
+      process.stderr.write(
+        `Reviewer output retry ${attempt}/${attempts - 1} after ${error.message}; failed after ${elapsedMs}ms; waiting ${waitMs}ms\n`,
+      );
+      if (waitMs > 0) await delay(waitMs);
     }
-    return callReviewModelFn(reviewOptions);
   }
+
+  throw lastError;
+}
+
+function resolveReviewerRetryBudget(reviewOptions = {}) {
+  try {
+    const resolved = resolveProviderOptions(reviewOptions.options, reviewOptions.providersConfig);
+    return {
+      retries: nonNegativeInteger(resolved.retries, 3),
+      retryFastFailureMs: positiveNumber(resolved.retryFastFailureMs, 10000),
+      retryDelayMs: nonNegativeInteger(resolved.retryDelayMs, 5000),
+    };
+  } catch {
+    return {
+      retries: 3,
+      retryFastFailureMs: 10000,
+      retryDelayMs: 5000,
+    };
+  }
+}
+
+function annotateReviewerAttempt(error, attempt) {
+  if (error && typeof error === "object") {
+    if (!Number.isInteger(error.attempts) || error.attempts < 1) {
+      error.attempts = attempt;
+    }
+  }
+  return error;
 }
 
 function isMalformedReviewerOutput(error) {
@@ -753,6 +825,12 @@ function isMalformedReviewerOutput(error) {
     "Reviewer returned an empty response.",
     "Reviewer response did not contain valid JSON.",
   ].some((prefix) => message.startsWith(prefix));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export function mergeReviewResults(primary, secondary) {

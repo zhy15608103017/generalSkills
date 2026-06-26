@@ -11,6 +11,7 @@ import {
   runRequirementAudit,
   runReviewPasses,
 } from "../skills/code-review-loop/scripts/ai-review.mjs";
+import { callReviewModel } from "../skills/code-review-loop/scripts/call-model.mjs";
 import {
   buildHistoryEntry,
   renderHistoryMarkdownEntry,
@@ -187,6 +188,34 @@ test("runReviewPasses returns needs_human with a structured failure when only pr
       attempts: 2,
     },
   ]);
+});
+
+test("runReviewPasses retries malformed reviewer output with the configured retry budget", async () => {
+  let attempts = 0;
+
+  const reviewRun = await runReviewPasses({
+    brief: "brief",
+    assets: { systemPrompt: "prompt", schema: {}, providersConfig },
+    options: {
+      provider: "primary",
+      retries: 3,
+      retryDelayMs: 0,
+      retryFastFailureMs: 10000,
+    },
+    primaryResolved: { provider: "primary", model: "primary-model" },
+    secondResolved: null,
+    callReviewModelFn: async () => {
+      attempts += 1;
+      if (attempts <= 3) {
+        throw new Error("Reviewer response did not contain valid JSON.");
+      }
+      return passResult({ summary: "malformed recovered" });
+    },
+  });
+
+  assert.equal(attempts, 4);
+  assert.equal(reviewRun.result.verdict, "pass");
+  assert.equal(reviewRun.result.summary, "malformed recovered");
 });
 
 for (const scenario of [
@@ -372,6 +401,84 @@ test("classifyReviewError categorizes common model invocation failures", async (
   assert.equal(classifyReviewError(cli).category, "cli");
 });
 
+test("callReviewModel retries retryable fast failures with configured defaults", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls <= 3) {
+      const error = new TypeError("fetch failed");
+      error.code = "ECONNRESET";
+      throw error;
+    }
+    return new Response(JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify(passResult({ summary: "retry ok" })),
+          },
+        },
+      ],
+    }), { status: 200 });
+  };
+
+  try {
+    const result = await callReviewModel({
+      brief: "brief",
+      systemPrompt: "prompt",
+      schema: {},
+      providersConfig,
+      options: {
+        provider: "primary",
+        apiKey: "primary-key",
+        retries: 3,
+        retryDelayMs: 0,
+        retryFastFailureMs: 10000,
+      },
+    });
+
+    assert.equal(calls, 4);
+    assert.equal(result.summary, "retry ok");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("callReviewModel does not retry failures outside the fast-failure window", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const error = new TypeError("fetch failed");
+    error.code = "ECONNRESET";
+    throw error;
+  };
+
+  try {
+    await assert.rejects(
+      () => callReviewModel({
+        brief: "brief",
+        systemPrompt: "prompt",
+        schema: {},
+        providersConfig,
+        options: {
+          provider: "primary",
+          apiKey: "primary-key",
+          retries: 3,
+          retryDelayMs: 0,
+          retryFastFailureMs: 1,
+        },
+      }),
+      /fetch failed/,
+    );
+
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("renderMarkdownReport displays structured reviewer failures", () => {
   const report = renderMarkdownReport({
     verdict: "needs_human",
@@ -403,6 +510,9 @@ test("renderMarkdownReport displays structured reviewer failures", () => {
 
 test("history markdown displays structured reviewer failures", () => {
   const entry = buildHistoryEntry({
+    context: {
+      reviewLimits: { maxReviewRounds: "infinity" },
+    },
     result: {
       verdict: "needs_human",
       summary: "model failed",
@@ -431,6 +541,8 @@ test("history markdown displays structured reviewer failures", () => {
   assert.match(markdown, /requirement-auditor/);
   assert.match(markdown, /network/);
   assert.match(markdown, /fetch failed/);
+  assert.equal(entry.limits.maxReviewRounds, "infinity");
+  assert.match(markdown, /审核轮数上限: infinity/);
 });
 
 test("requirement audit cache key ignores generated time but tracks requirement inputs", () => {

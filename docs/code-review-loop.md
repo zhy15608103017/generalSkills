@@ -105,6 +105,8 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs \
 
 默认只把 `P0` 和 `P1` 视为阻塞；`P2` 和 `P3` 是非阻塞提醒，但最终报告里不能隐藏。
 
+审核/修复闭环默认最多运行 `3` 轮。可以通过 `AI_REVIEW_MAX_REVIEW_ROUNDS` 或 `--max-review-rounds <count|infinity>` 覆盖；值为 `infinity` 时表示无上限，适合明确需要一直循环到无阻塞问题的场景。解析后的值会写入 `latest-brief.md` 和 `history`，供外部 agent 或自动化执行闭环时消费。
+
 ## 主入口执行流程
 
 `ai-review.mjs` 的非 dry-run 流程如下：
@@ -217,7 +219,7 @@ maxDocBytes=60000
 maxFileBytes=200000
 maxDiffBytes=800000
 timeoutMs=180000
-retries=2
+retries=3
 ```
 
 ## 主审模型配置
@@ -234,7 +236,9 @@ retries=2
 | API style | `--api-style` | `AI_REVIEW_API_STYLE` | provider 默认；否则 `chat` | API 风格 |
 | CLI command | `--cli-command` | `AI_REVIEW_CLI_COMMAND` 或 provider `commandEnv` | provider 默认 command | CLI reviewer 命令 |
 | timeout | `--timeout-ms` | `AI_REVIEW_TIMEOUT_MS` | provider 默认；否则 `120000` | 单次请求超时毫秒 |
-| retries | `--retries` | `AI_REVIEW_RETRIES` | provider 默认；否则 `1` | 可重试模型错误次数 |
+| retries | `--retries` | `AI_REVIEW_RETRIES` | provider 默认；否则 `3` | 快速失败时可重试模型错误次数 |
+| retry fast failure window | `--retry-fast-failure-ms` | `AI_REVIEW_RETRY_FAST_FAILURE_MS` | provider 默认；否则 `10000` | 单次失败耗时不超过该毫秒数才会重试 |
+| retry delay | `--retry-delay-ms` | `AI_REVIEW_RETRY_DELAY_MS` | provider 默认；否则 `5000` | 每次重试前等待毫秒数 |
 
 其他通用环境变量：
 
@@ -246,6 +250,7 @@ retries=2
 | `AI_REVIEW_STRICT_OUTPUT` | provider 默认；否则 `false` | 本地是否严格校验模型输出结构 |
 | `AI_REVIEW_THINKING_TYPE` | provider requestOptions 里的 thinking type | 控制兼容 thinking 字段的模型 |
 | `AI_REVIEW_STREAMING` | `false` | chat completions 是否使用流式读取 |
+| `AI_REVIEW_MAX_REVIEW_ROUNDS` | `3` | 审核/修复闭环最大轮数；`infinity` 表示无上限 |
 | `AI_REVIEW_TIME_ZONE` | 系统本地时区 | 报告时间和 run id 时区 |
 | `AI_REVIEW_HISTORY_LIMIT` | `5` | 保留 history/run 记录数，`0` 表示不保留 |
 
@@ -285,8 +290,10 @@ retries=2
 | P1 阈值 | `--second-p1-threshold` | `AI_REVIEW_SECOND_P1_THRESHOLD` | `1` | auto 模式触发阈值 |
 | P2 阈值 | `--second-p2-threshold` | `AI_REVIEW_SECOND_P2_THRESHOLD` | `3` | auto 模式触发阈值 |
 | confidence 阈值 | `--second-confidence-threshold` | `AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD` | `0.8` | 主审低置信度触发二审 |
-| timeout | `--second-timeout-ms` | `AI_REVIEW_SECOND_TIMEOUT_MS` | `60000` | 二审单次请求超时毫秒 |
-| retries | `--second-retries` | `AI_REVIEW_SECOND_RETRIES` | `0` | 二审请求重试次数 |
+| timeout | `--second-timeout-ms` | `AI_REVIEW_SECOND_TIMEOUT_MS` | 继承主审预算 | 二审单次请求超时毫秒 |
+| retries | `--second-retries` | `AI_REVIEW_SECOND_RETRIES` | 继承主审预算 | 二审请求重试次数 |
+| retry fast failure window | `--second-retry-fast-failure-ms` | `AI_REVIEW_SECOND_RETRY_FAST_FAILURE_MS` | 继承主审预算 | 二审快速失败重试窗口 |
+| retry delay | `--second-retry-delay-ms` | `AI_REVIEW_SECOND_RETRY_DELAY_MS` | 继承主审预算 | 二审每次重试前等待毫秒数 |
 
 二审 mode：
 
@@ -313,13 +320,13 @@ retries=2
 | `responses` 或 `apiStyle=responses` | `/responses` | 使用 `text.format=json_schema`，可设置 reasoning effort |
 | `cli` | 本地命令 | 将 prompt 和 schema 写入 stdin，解析 stdout 或 stderr |
 
-API 请求使用 `AbortController` 做超时。可重试错误包括：
+API 请求使用 `AbortController` 做超时。模型调用默认最多重试 `3` 次，但只有单次失败耗时不超过 `10000ms` 时才会重试；每次重试前默认等待 `5000ms`。这三个值分别由 `--retries` / `AI_REVIEW_RETRIES`、`--retry-fast-failure-ms` / `AI_REVIEW_RETRY_FAST_FAILURE_MS`、`--retry-delay-ms` / `AI_REVIEW_RETRY_DELAY_MS` 配置。可重试错误包括：
 
 - `AbortError`
 - HTTP `429`
 - HTTP `>=500`
 
-模型输出为空或没有合法 JSON 时，`callReviewModelWithMalformedRetry` 会额外重试一次；这和 provider 层 retries 是两套机制。
+模型输出为空或没有合法 JSON 时，`callReviewModelWithMalformedRetry` 使用同一组 `retries/window/delay` 参数重试；它和单次 API/CLI 调用内部的网络重试是两层机制，不共享一个全局计数器。
 
 ## CodeGraph 配置
 
@@ -477,6 +484,13 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --dry-run
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --verify "git diff --check"
 ```
 
+覆盖审核/修复闭环轮数：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --max-review-rounds 5 --verify "git diff --check"
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --max-review-rounds infinity --verify "git diff --check"
+```
+
 带测试输出：
 
 ```bash
@@ -526,7 +540,9 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs \
 node .agents/skills/code-review-loop/scripts/ai-review.mjs \
   --second-review-mode auto \
   --second-timeout-ms 60000 \
-  --second-retries 0 \
+  --second-retries 3 \
+  --second-retry-fast-failure-ms 10000 \
+  --second-retry-delay-ms 5000 \
   --second-confidence-threshold 0.8 \
   --verify "git diff --check"
 ```
@@ -540,7 +556,10 @@ AI_REVIEW_PRIMARY_PROVIDER=deepseek
 AI_REVIEW_PRIMARY_MODEL=deepseek-v4-pro
 AI_REVIEW_PRIMARY_API_KEY=<key>
 AI_REVIEW_TIMEOUT_MS=120000
-AI_REVIEW_RETRIES=1
+AI_REVIEW_RETRIES=3
+AI_REVIEW_RETRY_FAST_FAILURE_MS=10000
+AI_REVIEW_RETRY_DELAY_MS=5000
+AI_REVIEW_MAX_REVIEW_ROUNDS=3
 ```
 
 提交前双模型：
@@ -561,7 +580,9 @@ AI_REVIEW_SECOND_P1_THRESHOLD=1
 AI_REVIEW_SECOND_P2_THRESHOLD=3
 AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD=0.8
 AI_REVIEW_SECOND_TIMEOUT_MS=60000
-AI_REVIEW_SECOND_RETRIES=0
+AI_REVIEW_SECOND_RETRIES=3
+AI_REVIEW_SECOND_RETRY_FAST_FAILURE_MS=10000
+AI_REVIEW_SECOND_RETRY_DELAY_MS=5000
 ```
 
 API style 通常可以由 provider 默认值推断；如需显式设置，DeepSeek/OpenAI-compatible chat 使用 `AI_REVIEW_API_STYLE` 取值 `chat`，OpenAI Responses 二审使用 `AI_REVIEW_SECOND_API_STYLE` 取值 `responses`。
@@ -670,14 +691,18 @@ AI_REVIEW_SECOND_CONFIDENCE_THRESHOLD=0.8
 
 ```env
 AI_REVIEW_TIMEOUT_MS=180000
-AI_REVIEW_RETRIES=2
+AI_REVIEW_RETRIES=3
+AI_REVIEW_RETRY_FAST_FAILURE_MS=10000
+AI_REVIEW_RETRY_DELAY_MS=5000
 ```
 
 二审：
 
 ```env
 AI_REVIEW_SECOND_TIMEOUT_MS=60000
-AI_REVIEW_SECOND_RETRIES=0
+AI_REVIEW_SECOND_RETRIES=3
+AI_REVIEW_SECOND_RETRY_FAST_FAILURE_MS=10000
+AI_REVIEW_SECOND_RETRY_DELAY_MS=5000
 ```
 
 ### 上下文太大
@@ -696,7 +721,7 @@ AI_REVIEW_SECOND_RETRIES=0
 
 ### 模型返回非 JSON
 
-脚本会对空输出或无合法 JSON 的情况额外重试一次。如果仍失败，建议：
+脚本会对空输出或无合法 JSON 的情况按同一组可配置重试参数重试。如果仍失败，建议：
 
 - 换 `responseFormat`。
 - 开启 `AI_REVIEW_STRICT_OUTPUT=true` 让本地更严格暴露问题。

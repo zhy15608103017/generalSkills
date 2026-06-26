@@ -10,6 +10,7 @@ export function renderReviewBrief(context) {
   const verification = renderVerifications(context.verification);
   const scope = renderScope(context.scope);
   const profile = renderProfile(context.profile);
+  const reviewLimits = renderReviewLimits(context.reviewLimits);
   const codegraph = renderCodeGraph(context.codegraphContext);
 
   const brief = `# 代码审核上下文
@@ -29,6 +30,10 @@ ${scope}
 ## 审核配置
 
 ${profile}
+
+## 审核闭环限制
+
+${reviewLimits}
 
 ## Git 状态
 
@@ -145,6 +150,22 @@ function renderProfile(profile = {}) {
     "已应用选项:",
     appliedOptions,
   ].join("\n");
+}
+
+function renderReviewLimits(reviewLimits = {}) {
+  return [
+    `最大审核/修复轮数: ${renderReviewLimitValue(reviewLimits.maxReviewRounds)}`,
+  ].join("\n");
+}
+
+function renderReviewLimitValue(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["infinity", "infinite", "inf", "unlimited"].includes(normalized)) {
+    return "infinity";
+  }
+  const parsed = Number(value);
+  if (Number.isInteger(parsed) && parsed >= 1) return String(parsed);
+  return "3";
 }
 
 function renderVerifications(verification) {

@@ -13,7 +13,7 @@ Use this skill to run a local AI review loop over the current Git changes. The r
 - Make the context self-contained. The reviewer cannot see the conversation, so inline the original request, later corrections, current understanding, explicit anti-examples, design decisions, non-goals, acceptance criteria, and verification commands.
 - Do not let the reviewer model edit files directly. It returns structured findings; the current coding agent fixes, verifies, and reruns review.
 - Treat only `P0` and `P1` findings as blocking unless the user says otherwise.
-- Never run infinite review/fix cycles. Stop after three review rounds and return remaining blocking issues for human decision.
+- Do not run unbounded review/fix cycles unless the review-round limit is explicitly configured as `infinity`. The default maximum is three review rounds; configure it with `--max-review-rounds` or `AI_REVIEW_MAX_REVIEW_ROUNDS`.
 - Never mark work complete only because AI review passed. Also report local verification commands and results.
 
 ## Context File
@@ -55,8 +55,8 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --veri
 6. Read `.ai-review/latest-result.json` and `.ai-review/latest-report.md`; inspect requirement-audit artifacts when the gate blocks.
 7. Report all findings, but fix blocking `P0` and `P1` findings before completion.
 8. Fix blocking findings yourself, then rerun local verification.
-9. Repeat the review loop up to three times.
-10. If blocking findings remain after three rounds, stop and return the remaining issues for human decision.
+9. Repeat the review loop up to the configured maximum (`3` by default; `infinity` means no round cap).
+10. If blocking findings remain after the configured maximum, stop and return the remaining issues for human decision.
 
 ## Commands
 
@@ -74,7 +74,13 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --veri
 - `fail`: One or more `P0` or `P1` findings must be fixed before completion.
 - `needs_human`: The reviewer cannot decide safely because context is missing, requirements conflict, or the patch is too risky for automatic repair.
 
-If reviewer output is malformed, rerun once with the same context. If it is malformed again, stop and report the tool failure.
+If reviewer output is malformed, retry with the same configurable retry parameters. If retries are exhausted, stop and report the tool failure.
+
+## Review Limits and Retries
+
+- Review/fix loop limit: `--max-review-rounds <count|infinity>` or `AI_REVIEW_MAX_REVIEW_ROUNDS`; default `3`.
+- Retryable model failures retry only when an attempt fails quickly. Defaults: `AI_REVIEW_RETRIES=3`, `AI_REVIEW_RETRY_FAST_FAILURE_MS=10000`, and `AI_REVIEW_RETRY_DELAY_MS=5000`.
+- Override the same retry budget for the second reviewer with `--second-retries`, `--second-retry-fast-failure-ms`, `--second-retry-delay-ms`, or `AI_REVIEW_SECOND_*` equivalents. When unset, second review inherits the primary budget.
 
 ## References
 

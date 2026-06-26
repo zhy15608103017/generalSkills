@@ -94,6 +94,10 @@ export function parseArgs(argv) {
     } else if (arg === "--history-limit" && next) {
       args.historyLimit = Number(next);
       index += 1;
+    } else if (arg === "--max-review-rounds" && next) {
+      args.maxReviewRounds = parseMaxReviewRoundsValue(next);
+      args.explicitOptions.maxReviewRounds = true;
+      index += 1;
     } else if (arg === "--provider" && next) {
       args.provider = next;
       index += 1;
@@ -135,6 +139,14 @@ export function parseArgs(argv) {
       args.secondRetries = Number(next);
       args.explicitOptions.secondRetries = true;
       index += 1;
+    } else if (arg === "--second-retry-fast-failure-ms" && next) {
+      args.secondRetryFastFailureMs = Number(next);
+      args.explicitOptions.secondRetryFastFailureMs = true;
+      index += 1;
+    } else if (arg === "--second-retry-delay-ms" && next) {
+      args.secondRetryDelayMs = Number(next);
+      args.explicitOptions.secondRetryDelayMs = true;
+      index += 1;
     } else if (arg === "--second-confidence-threshold" && next) {
       args.secondConfidenceThreshold = Number(next);
       args.explicitOptions.secondConfidenceThreshold = true;
@@ -164,6 +176,14 @@ export function parseArgs(argv) {
     } else if (arg === "--retries" && next) {
       args.retries = Number(next);
       args.explicitOptions.retries = true;
+      index += 1;
+    } else if (arg === "--retry-fast-failure-ms" && next) {
+      args.retryFastFailureMs = Number(next);
+      args.explicitOptions.retryFastFailureMs = true;
+      index += 1;
+    } else if (arg === "--retry-delay-ms" && next) {
+      args.retryDelayMs = Number(next);
+      args.explicitOptions.retryDelayMs = true;
       index += 1;
     } else if (arg === "--max-files" && next) {
       args.maxFiles = Number(next);
@@ -199,11 +219,51 @@ export function parseArgs(argv) {
   return args;
 }
 
+export function resolveReviewLimits(options = {}) {
+  const maxReviewRounds = resolveMaxReviewRounds(options);
+  return {
+    maxReviewRounds: maxReviewRounds === Infinity ? "infinity" : maxReviewRounds,
+  };
+}
+
 function splitPathList(value = "") {
   return String(value)
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseMaxReviewRoundsValue(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["infinity", "infinite", "inf", "unlimited"].includes(normalized)) {
+    return Infinity;
+  }
+  return Number(value);
+}
+
+export function resolveMaxReviewRounds(options = {}) {
+  const values = [
+    options.maxReviewRounds,
+    readEnv("AI_REVIEW_MAX_REVIEW_ROUNDS"),
+    3,
+  ];
+
+  for (const value of values) {
+    if (value === Infinity) return Infinity;
+    const normalized = String(value || "").trim().toLowerCase();
+    if (["infinity", "infinite", "inf", "unlimited"].includes(normalized)) {
+      return Infinity;
+    }
+    const parsed = Number(value);
+    if (Number.isInteger(parsed) && parsed >= 1) return parsed;
+  }
+
+  return 3;
+}
+
+function readEnv(name) {
+  const value = process.env[name];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export async function collectReviewContext(options = {}) {
@@ -257,6 +317,7 @@ export async function collectReviewContext(options = {}) {
     generatedAt: formatReviewTime(new Date(), options),
     scope,
     profile,
+    reviewLimits: resolveReviewLimits(options),
     maxBriefBytes: options.maxBriefBytes,
     status,
     diffStat,

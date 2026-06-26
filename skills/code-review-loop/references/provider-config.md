@@ -25,7 +25,9 @@ Each provider can define:
   "strictSchema": true,
   "strictOutput": false,
   "timeoutMs": 120000,
-  "retries": 1,
+  "retries": 3,
+  "retryFastFailureMs": 10000,
+  "retryDelayMs": 5000,
   "requestOptions": {}
 }
 ```
@@ -70,7 +72,10 @@ Common runtime environment variables:
 AI_REVIEW_STRICT_SCHEMA=true
 AI_REVIEW_STRICT_OUTPUT=false
 AI_REVIEW_TIMEOUT_MS=120000
-AI_REVIEW_RETRIES=1
+AI_REVIEW_RETRIES=3
+AI_REVIEW_RETRY_FAST_FAILURE_MS=10000
+AI_REVIEW_RETRY_DELAY_MS=5000
+AI_REVIEW_MAX_REVIEW_ROUNDS=3
 ```
 
 Repository-root `.env` example:
@@ -181,8 +186,14 @@ Use `AI_REVIEW_THINKING_TYPE=disabled` if your GLM-compatible gateway rejects th
 --second-p0-threshold <count>
 --second-p1-threshold <count>
 --second-p2-threshold <count>
+--second-retries <count>
+--second-retry-fast-failure-ms <milliseconds>
+--second-retry-delay-ms <milliseconds>
 --timeout-ms <milliseconds>
 --retries <count>
+--retry-fast-failure-ms <milliseconds>
+--retry-delay-ms <milliseconds>
+--max-review-rounds <count|infinity>
 --time-zone <iana-zone|offset|system>
 --history-limit <count>
 --profile standard|auto|high-accuracy
