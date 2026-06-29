@@ -2,6 +2,23 @@
 
 本文档说明 `code-review-loop` 的模型、`.env`、双模型和命令行参数配置方式。该配置是通用的，不绑定具体项目。
 
+## 目录
+
+- [配置来源优先级](#配置来源优先级)
+- [最小配置](#最小配置)
+- [双模型配置](#双模型配置)
+- [主模型变量](#主模型变量)
+- [第二模型变量](#第二模型变量)
+- [通用运行变量](#通用运行变量)
+- [transport 和 api style](#transport-和-api-style)
+- [内置 provider](#内置-provider)
+- [Provider 示例](#provider-示例)
+- [命令行覆盖](#命令行覆盖)
+- [推荐配置策略](#推荐配置策略)
+- [安全建议](#安全建议)
+- [`.ai-reviewignore`](#ai-reviewignore)
+- [故障排查](#故障排查)
+
 ## 配置来源优先级
 
 配置按以下优先级生效：
@@ -545,6 +562,7 @@ AI_REVIEW_API_STYLE=chat
 
 - 不要提交包含真实 API key 的 `.env`。
 - 不要把 `.ai-review/latest-brief.md` 上传到公开位置，它包含本地代码上下文。
+- 内置脱敏规则只覆盖常见环境变量、HTTP bearer token、JSON key 字段和 CLI 参数形态；它用于降低误传风险，不应被视为完整 DLP 或安全边界。
 - CLI command 只能来自可信配置。
 - 审核上下文过大时，优先用 `--path` 缩小范围，而不是盲目增大限制。
 - 高风险改动建议启用双模型和 `--profile high-accuracy`。

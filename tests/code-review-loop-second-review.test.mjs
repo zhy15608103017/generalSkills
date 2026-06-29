@@ -9,6 +9,7 @@ import {
 } from "../skills/code-review-loop/scripts/ai-review.mjs";
 import { resolveProviderOptions } from "../skills/code-review-loop/scripts/call-model.mjs";
 import { parseArgs, renderReviewBrief } from "../skills/code-review-loop/scripts/collect-context.mjs";
+import { renderReviewLimitValue } from "../skills/code-review-loop/scripts/review-limits.mjs";
 
 const providersConfig = {
   defaultProvider: "primary",
@@ -146,6 +147,14 @@ test("resolveMaxReviewRounds defaults to three and accepts infinity", () => {
   assert.equal(resolveMaxReviewRounds({}), 3);
   assert.equal(resolveMaxReviewRounds({ maxReviewRounds: 7 }), 7);
   assert.equal(resolveMaxReviewRounds({ maxReviewRounds: Infinity }), Infinity);
+  assert.equal(resolveMaxReviewRounds({}, { AI_REVIEW_MAX_REVIEW_ROUNDS: "5" }), 5);
+  assert.equal(resolveMaxReviewRounds({ maxReviewRounds: "invalid" }, { AI_REVIEW_MAX_REVIEW_ROUNDS: "inf" }), Infinity);
+});
+
+test("renderReviewLimitValue normalizes invalid and infinite values", () => {
+  assert.equal(renderReviewLimitValue("unlimited"), "infinity");
+  assert.equal(renderReviewLimitValue("invalid", { AI_REVIEW_MAX_REVIEW_ROUNDS: "6" }), "6");
+  assert.equal(renderReviewLimitValue("invalid", {}), "3");
 });
 
 test("renderReviewBrief includes the resolved review round limit", () => {

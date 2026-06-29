@@ -2,6 +2,16 @@
 
 本文说明如何使用 `code-review-loop` 做一次完整、可重复的 AI 审核。该 skill 是通用能力；项目规则应通过 `AGENTS.md`、`--doc` 或 `--checklist` 显式传入。
 
+## 目录
+
+- [适用场景](#适用场景)
+- [核心原则](#核心原则)
+- [两阶段审核](#两阶段审核)
+- [标准流程](#标准流程)
+- [推荐命令模板](#推荐命令模板)
+- [`.ai-reviewignore`](#ai-reviewignore)
+- [结果处理建议](#结果处理建议)
+
 ## 适用场景
 
 - 完成功能切片后，希望提交前做外部 AI 审核。
@@ -234,4 +244,4 @@ src/generated/**
 
 不要只因为 AI 审核通过就宣布完成；还需要说明本地验证命令和结果。
 
-`.ai-review/latest-brief.md`、`.ai-review/cache/`、`.ai-review/runs/`、`.ai-review/history.jsonl` 和 `.ai-review/history.md` 可能包含脱敏后但仍与任务相关的代码上下文、findings、审核模型元数据和审核细节，应按敏感本地 artifact 处理。
+`.ai-review/latest-brief.md`、`.ai-review/cache/`、`.ai-review/runs/`、`.ai-review/history.jsonl` 和 `.ai-review/history.md` 可能包含脱敏后但仍与任务相关的代码上下文、findings、审核模型元数据和审核细节，应按敏感本地 artifact 处理。内置脱敏只用于降低常见密钥暴露风险，不构成完整 DLP 或安全边界；不要把审核产物上传到公开位置。

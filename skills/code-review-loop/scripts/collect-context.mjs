@@ -6,6 +6,11 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { redactSecrets } from "./redact-secrets.mjs";
 import { renderReviewBrief } from "./render-brief.mjs";
+import {
+  parseMaxReviewRoundsValue,
+  resolveMaxReviewRounds,
+  resolveReviewLimits,
+} from "./review-limits.mjs";
 import { applyReviewProfile, maxProfileFileBytes, resolveReviewProfile } from "./review-profile.mjs";
 import { formatReviewTime } from "./time-format.mjs";
 
@@ -15,6 +20,7 @@ const FILE_CONTEXT_CACHE_VERSION = "v2-redact-2026-06-15";
 const DEFAULT_MAX_FILE_BYTES = 120000;
 
 export { redactSecrets, renderReviewBrief, getGitRoot };
+export { resolveMaxReviewRounds, resolveReviewLimits };
 
 export function parseArgs(argv) {
   const args = {
@@ -231,51 +237,11 @@ export function parseArgs(argv) {
   return args;
 }
 
-export function resolveReviewLimits(options = {}) {
-  const maxReviewRounds = resolveMaxReviewRounds(options);
-  return {
-    maxReviewRounds: maxReviewRounds === Infinity ? "infinity" : maxReviewRounds,
-  };
-}
-
 function splitPathList(value = "") {
   return String(value)
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function parseMaxReviewRoundsValue(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (["infinity", "infinite", "inf", "unlimited"].includes(normalized)) {
-    return Infinity;
-  }
-  return Number(value);
-}
-
-export function resolveMaxReviewRounds(options = {}) {
-  const values = [
-    options.maxReviewRounds,
-    readEnv("AI_REVIEW_MAX_REVIEW_ROUNDS"),
-    3,
-  ];
-
-  for (const value of values) {
-    if (value === Infinity) return Infinity;
-    const normalized = String(value || "").trim().toLowerCase();
-    if (["infinity", "infinite", "inf", "unlimited"].includes(normalized)) {
-      return Infinity;
-    }
-    const parsed = Number(value);
-    if (Number.isInteger(parsed) && parsed >= 1) return parsed;
-  }
-
-  return 3;
-}
-
-function readEnv(name) {
-  const value = process.env[name];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export async function collectReviewContext(options = {}) {

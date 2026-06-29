@@ -1,4 +1,5 @@
 import { redactSecrets } from "./redact-secrets.mjs";
+import { renderReviewLimitValue } from "./review-limits.mjs";
 
 export function renderReviewBrief(context) {
   const docBlocks = context.docs
@@ -156,16 +157,6 @@ function renderReviewLimits(reviewLimits = {}) {
   return [
     `最大审核/修复轮数: ${renderReviewLimitValue(reviewLimits.maxReviewRounds)}`,
   ].join("\n");
-}
-
-function renderReviewLimitValue(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (["infinity", "infinite", "inf", "unlimited"].includes(normalized)) {
-    return "infinity";
-  }
-  const parsed = Number(value);
-  if (Number.isInteger(parsed) && parsed >= 1) return String(parsed);
-  return "3";
 }
 
 function renderVerifications(verification) {

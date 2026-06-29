@@ -1,3 +1,4 @@
+import { renderReviewLimitValue } from "./review-limits.mjs";
 import { formatReviewTime } from "./time-format.mjs";
 
 export function withDisplayFields(result = {}) {
@@ -159,18 +160,6 @@ function renderReviewers(reviewers = {}) {
     items.push(`二审模型 (${reviewers.second.provider}/${reviewers.second.model})`);
   }
   return items.join(", ");
-}
-
-function renderReviewLimitValue(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (["infinity", "infinite", "inf", "unlimited"].includes(normalized)) {
-    return "infinity";
-  }
-  const parsed = Number(value);
-  if (Number.isInteger(parsed) && parsed >= 1) return String(parsed);
-  const envValue = process.env.AI_REVIEW_MAX_REVIEW_ROUNDS;
-  if (envValue && envValue !== value) return renderReviewLimitValue(envValue);
-  return "3";
 }
 
 function renderSources(sources = []) {
