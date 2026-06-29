@@ -43,7 +43,9 @@ export { resolveMaxReviewRounds };
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const root = await getGitRoot();
-  await assertRequestContext(root, options);
+  if (!options.dryRun) {
+    await assertRequestContext(root, options);
+  }
   const context = await collectReviewContext(options);
   await loadEnvFile(context.root);
   context.reviewLimits = resolveReviewLimits(options);

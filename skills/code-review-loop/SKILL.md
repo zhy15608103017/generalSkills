@@ -45,7 +45,7 @@ Successful audits are cached; the gate skips re-auditing when context, prompt, a
 1. Create or update `.ai-review/review-context/current-request.md` with the original request, user corrections, current agent understanding, anti-examples, design, non-goals, acceptance criteria, and suggested verification.
 2. Confirm there are local changes to review with `git status --short`.
 3. Run local verification commands that match the change (e.g. `git diff --check`, `npm test`).
-4. Optionally, run with `--dry-run` first to inspect the review brief without calling a model.
+4. Optionally, run with `--dry-run` first to inspect the review brief without calling a model. Dry-run can run before the request-context file exists; non-dry-run review still requires `.ai-review/review-context/current-request.md`.
 5. Run the bundled review script from the repository root. It first runs the requirement-understanding gate, then runs code review only if the gate passes:
 
 ```bash

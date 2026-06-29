@@ -156,7 +156,7 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --veri
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile high-accuracy --verify "git diff --check"
 ```
 
-只生成审核上下文，不调用模型（dry run）：
+只生成审核上下文，不调用模型（dry run）。dry-run 可在 `.ai-review/review-context/current-request.md` 尚未创建时运行，用于先检查将要发送给审核模型的 diff、项目规则和文件上下文；正式非 dry-run 审核仍必须先补齐需求上下文：
 
 ```bash
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --dry-run

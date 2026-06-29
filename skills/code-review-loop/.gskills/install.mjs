@@ -8,6 +8,7 @@ const INSTRUCTIONS = [
 ].join("\n");
 const REVIEW_IGNORE_ENTRY = ".ai-review";
 const REVIEW_SCOPE_IGNORE_ENTRY = ".ai-reviewignore";
+const ENV_IGNORE_ENTRY = ".env";
 const ENV_TEMPLATE_FILE = path.join("assets", "env-template.env");
 const ENV_TEMPLATE_START = "# gskills:code-review-loop env:start";
 const ENV_TEMPLATE_END = "# gskills:code-review-loop env:end";
@@ -16,6 +17,7 @@ export async function install(context) {
   await upsertAgentsBlock(context.destDir, context.skillName, INSTRUCTIONS);
   await ensureEnvTemplate(context.destDir, context.skillDir);
   await removeInstalledAssets(context.targets || []);
+  await ensureGitignoreEntry(context.destDir, ENV_IGNORE_ENTRY);
   await ensureGitignoreEntry(context.destDir, REVIEW_IGNORE_ENTRY);
   await ensureGitignoreEntry(context.destDir, REVIEW_SCOPE_IGNORE_ENTRY);
   await ensureReviewIgnoreFile(context.destDir);

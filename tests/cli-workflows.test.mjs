@@ -384,7 +384,7 @@ test("code-review-loop install hook creates gitignore when missing", async () =>
     });
 
     const gitignoreText = await readFile(path.join(destDir, ".gitignore"), "utf8");
-    assert.equal(gitignoreText, ".ai-review\n.ai-reviewignore\n");
+    assert.equal(gitignoreText, ".env\n.ai-review\n.ai-reviewignore\n");
   });
 });
 
@@ -401,7 +401,7 @@ test("code-review-loop install hook preserves existing gitignore formatting", as
     });
 
     const gitignoreText = await readFile(path.join(destDir, ".gitignore"), "utf8");
-    assert.equal(gitignoreText, `${existingGitignore}.ai-review\n.ai-reviewignore\n`);
+    assert.equal(gitignoreText, `${existingGitignore}.env\n.ai-review\n.ai-reviewignore\n`);
   });
 });
 

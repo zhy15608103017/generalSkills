@@ -874,3 +874,26 @@ test("ai-review writes structured failure output when primary provider config is
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("ai-review dry-run can inspect a brief before request context exists", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-dry-run-"));
+  try {
+    await execFileAsync("git", ["init"], { cwd: tempDir });
+
+    const scriptPath = path.join(repoRoot, "skills", "code-review-loop", "scripts", "ai-review.mjs");
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [scriptPath, "--dry-run"],
+      { cwd: tempDir, windowsHide: true },
+    );
+
+    assert.match(stdout, /AI 审核结论/);
+    const result = JSON.parse(await readFile(path.join(tempDir, ".ai-review", "latest-result.json"), "utf8"));
+    const brief = await readFile(path.join(tempDir, ".ai-review", "latest-brief.md"), "utf8");
+    assert.equal(result.verdict, "needs_human");
+    assert.match(result.summary, /dry-run 已完成/);
+    assert.match(brief, /未提供需求、设计、计划或额外文档。/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
