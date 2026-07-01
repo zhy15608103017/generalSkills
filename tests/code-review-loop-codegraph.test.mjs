@@ -11,6 +11,10 @@ import {
   parseArgs,
   renderReviewBrief
 } from "../skills/code-review-loop/scripts/collect-context.mjs";
+import {
+  applyReviewProfile,
+  resolveReviewProfile,
+} from "../skills/code-review-loop/scripts/review-profile.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -343,4 +347,112 @@ test("collectReviewContext applies default file byte budget without parseArgs", 
       process.chdir(previousCwd);
     }
   });
+});
+
+test("collectReviewContext keeps diff stat stat-only", async () => {
+  await withTempDir(async (tempDir) => {
+    const repoDir = path.join(tempDir, "repo");
+    await mkdir(repoDir, { recursive: true });
+    await initGitRepo(repoDir, {
+      files: {
+        "index.js": "export const value = 1;\n",
+      },
+      dirtyIndex: false,
+    });
+    const previousCwd = process.cwd();
+
+    try {
+      await writeRepoFile(repoDir, "index.js", [
+        "export const value = 2;",
+        "export const other = 3;",
+        "",
+      ].join("\n"));
+
+      process.chdir(repoDir);
+      const context = await collectReviewContext({
+        ...parseArgs([]),
+        allowEmpty: true,
+      });
+
+      assert.match(context.diffStat, /index\.js/);
+      assert.match(context.diffStat, /changed/);
+      assert.doesNotMatch(context.diffStat, /diff --git/);
+      assert.doesNotMatch(context.diffStat, /@@/);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+});
+
+test("collectReviewContext includes lockfiles when .ai-reviewignore does not exclude them", async () => {
+  await withTempDir(async (tempDir) => {
+    const repoDir = path.join(tempDir, "repo");
+    await mkdir(repoDir, { recursive: true });
+    await initGitRepo(repoDir, {
+      files: {
+        "pnpm-lock.yaml": "lockfileVersion: '9.0'\nold: true\n",
+      },
+      dirtyIndex: false,
+    });
+    const previousCwd = process.cwd();
+
+    try {
+      await writeRepoFile(repoDir, "pnpm-lock.yaml", [
+        "lockfileVersion: '9.0'",
+        "new-lockfile-token: should-be-visible",
+        "",
+      ].join("\n"));
+
+      process.chdir(repoDir);
+      const context = await collectReviewContext({
+        ...parseArgs([]),
+        allowEmpty: true,
+        maxFiles: 10,
+      });
+      const lockContext = context.fileContexts.find((item) => item.path === "pnpm-lock.yaml");
+
+      assert.ok(context.changedFiles.includes("pnpm-lock.yaml"));
+      assert.match(lockContext?.content || "", /new-lockfile-token/);
+      assert.match(context.diff, /new-lockfile-token/);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+});
+
+test("auto high-accuracy profile keeps the brief byte budget bounded", () => {
+  const options = parseArgs(["--profile", "auto"]);
+  const profile = resolveReviewProfile({
+    changedFiles: Array.from({ length: 8 }, (_, index) => `src/file-${index}.js`),
+    diff: "",
+    options,
+  });
+
+  applyReviewProfile(options, profile);
+
+  assert.equal(profile.selected, "high-accuracy");
+  assert.equal(options.maxBriefBytes, 600000);
+  assert.equal(options.maxDiffBytes, 350000);
+});
+
+test("explicit review budget flags override auto high-accuracy bounds", () => {
+  const options = parseArgs([
+    "--profile",
+    "auto",
+    "--max-brief-bytes",
+    "1200000",
+    "--max-diff-bytes",
+    "800000",
+  ]);
+  const profile = resolveReviewProfile({
+    changedFiles: Array.from({ length: 8 }, (_, index) => `src/file-${index}.js`),
+    diff: "",
+    options,
+  });
+
+  applyReviewProfile(options, profile);
+
+  assert.equal(profile.selected, "high-accuracy");
+  assert.equal(options.maxBriefBytes, 1200000);
+  assert.equal(options.maxDiffBytes, 800000);
 });

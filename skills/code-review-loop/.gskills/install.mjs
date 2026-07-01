@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
 const INSTRUCTIONS = [
   "## AI Code Review",
@@ -12,6 +12,13 @@ const ENV_IGNORE_ENTRY = ".env";
 const ENV_TEMPLATE_FILE = path.join("assets", "env-template.env");
 const ENV_TEMPLATE_START = "# gskills:code-review-loop env:start";
 const ENV_TEMPLATE_END = "# gskills:code-review-loop env:end";
+const DEFAULT_REVIEW_IGNORE = [
+  "# Lockfiles are often huge; remove these lines when lockfile review is needed.",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+].join("\n") + "\n";
 
 export async function install(context) {
   await upsertAgentsBlock(context.destDir, context.skillName, INSTRUCTIONS);
@@ -52,11 +59,20 @@ async function ensureGitignoreEntry(destDir, entry) {
 
 async function ensureReviewIgnoreFile(destDir) {
   const reviewIgnorePath = path.join(destDir, REVIEW_SCOPE_IGNORE_ENTRY);
-  const existingText = await readTextIfExists(reviewIgnorePath);
-  if (existingText !== "") return;
+  if (await pathExists(reviewIgnorePath)) return;
 
   await mkdir(path.dirname(reviewIgnorePath), { recursive: true });
-  await writeFile(reviewIgnorePath, "", "utf8");
+  await writeFile(reviewIgnorePath, DEFAULT_REVIEW_IGNORE, "utf8");
+}
+
+async function pathExists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 async function ensureEnvTemplate(destDir, skillDir) {

@@ -1,9 +1,9 @@
 const HIGH_ACCURACY_OPTIONS = {
-  maxFiles: 24,
-  maxBriefBytes: 1200000,
-  maxDocBytes: 60000,
-  maxFileBytes: 200000,
-  maxDiffBytes: 800000,
+  maxFiles: 18,
+  maxBriefBytes: 600000,
+  maxDocBytes: 36000,
+  maxFileBytes: 120000,
+  maxDiffBytes: 350000,
   timeoutMs: 180000,
   retries: 3,
 };

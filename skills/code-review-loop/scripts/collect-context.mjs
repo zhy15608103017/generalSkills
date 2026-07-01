@@ -431,7 +431,10 @@ async function scopedGitStatus(root, pathspec) {
 
 async function scopedGitDiffStat(root, scope, pathspec) {
   if (!pathspec.length) return "";
-  return git([...scope.diffCommand, "--stat", ...pathspec], root);
+  const statCommand = scope.staged
+    ? ["diff", "--cached", "--no-ext-diff", "--stat"]
+    : ["diff", "--no-ext-diff", "--stat", scope.base];
+  return git([...statCommand, ...pathspec], root);
 }
 
 async function rawGitDiff(root, scope, files) {

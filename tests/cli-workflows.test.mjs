@@ -553,7 +553,7 @@ test("code-review-loop install hook masks provider-specific api keys in env temp
   });
 });
 
-test("code-review-loop install hook creates empty .ai-reviewignore when missing", async () => {
+test("code-review-loop install hook creates default lockfile .ai-reviewignore when missing", async () => {
   await withTempDir(async (destDir) => {
     await installSkills({
       repoDir: path.resolve("."),
@@ -563,7 +563,17 @@ test("code-review-loop install hook creates empty .ai-reviewignore when missing"
     });
 
     const reviewIgnoreText = await readFile(path.join(destDir, ".ai-reviewignore"), "utf8");
-    assert.equal(reviewIgnoreText, "");
+    assert.equal(
+      reviewIgnoreText,
+      [
+        "# Lockfiles are often huge; remove these lines when lockfile review is needed.",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "",
+      ].join("\n"),
+    );
   });
 });
 
@@ -581,6 +591,22 @@ test("code-review-loop install hook preserves existing .ai-reviewignore content"
 
     const reviewIgnoreText = await readFile(path.join(destDir, ".ai-reviewignore"), "utf8");
     assert.equal(reviewIgnoreText, existingReviewIgnore);
+  });
+});
+
+test("code-review-loop install hook preserves existing empty .ai-reviewignore", async () => {
+  await withTempDir(async (destDir) => {
+    await writeFile(path.join(destDir, ".ai-reviewignore"), "", "utf8");
+
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "codex",
+      skills: ["code-review-loop"]
+    });
+
+    const reviewIgnoreText = await readFile(path.join(destDir, ".ai-reviewignore"), "utf8");
+    assert.equal(reviewIgnoreText, "");
   });
 });
 
