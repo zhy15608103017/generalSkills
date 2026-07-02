@@ -240,6 +240,8 @@ AI_REVIEW_THINKING_TYPE=enabled
 AI_REVIEW_LOCAL_CLI=codex
 AI_REVIEW_LOCAL_CLI_ARGS=<trusted-args>
 AI_REVIEW_CLI_COMMAND=<command>
+AI_REVIEW_MAX_SHARDS=4
+AI_REVIEW_STATUS_HEARTBEAT_MS=15000
 AI_REVIEW_TIME_ZONE=Asia/Shanghai
 AI_REVIEW_HISTORY_LIMIT=5
 ```
@@ -262,6 +264,8 @@ AI_REVIEW_THINKING_TYPE      兼容部分支持 thinking 字段的模型
 AI_REVIEW_LOCAL_CLI          主模型本地 AI CLI preset，可选 claude、opencode、codex
 AI_REVIEW_LOCAL_CLI_ARGS     主模型本地 AI CLI 额外可信参数
 AI_REVIEW_CLI_COMMAND        主模型 CLI 审核命令
+AI_REVIEW_MAX_SHARDS         自动分片最大并行分片数，默认 4，最高 8；只限制上限，不决定是否分片
+AI_REVIEW_STATUS_HEARTBEAT_MS 状态 heartbeat 间隔毫秒，默认 15000；设为 0 可关闭周期 heartbeat
 AI_REVIEW_TIME_ZONE          审核产物时间时区；不设置时使用当前环境时区，支持 IANA 名称或 +08:00 这类固定偏移，显示格式为 YYYY-MM-DD hh:mm:ss
 AI_REVIEW_HISTORY_LIMIT      历史审核保留条数；默认 5，设为 0 时不保留历史运行目录和历史索引条目
 ```
@@ -492,6 +496,14 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --max-review-rounds 5
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --max-review-rounds infinity
 ```
 
+覆盖自动分片上限：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --max-shards 4
+```
+
+`--profile auto` 是标准入口。大型改动会自动拆成并行分片，并在分片完成后运行汇总审核；小型和中型改动仍自动使用单次代码审核。`--max-shards` 只限制自动分片的最大并行数量，不要求用户手动选择是否分片。
+
 覆盖二审的独立超时、重试和 auto 置信度阈值：
 
 ```bash
@@ -528,7 +540,7 @@ AI_REVIEW_RETRY_DELAY_MS=5000
 AI_REVIEW_MAX_REVIEW_ROUNDS=3
 ```
 
-提交前高准确性：
+提交前自动审核：
 
 ```env
 AI_REVIEW_PRIMARY_PROVIDER=deepseek
@@ -541,11 +553,20 @@ AI_REVIEW_SECOND_REVIEW_MODE=auto
 AI_REVIEW_SECOND_P0_THRESHOLD=1
 AI_REVIEW_SECOND_P1_THRESHOLD=1
 AI_REVIEW_SECOND_P2_THRESHOLD=3
+AI_REVIEW_MAX_SHARDS=4
 AI_REVIEW_TIMEOUT_MS=180000
 AI_REVIEW_RETRIES=3
 AI_REVIEW_RETRY_FAST_FAILURE_MS=10000
 AI_REVIEW_RETRY_DELAY_MS=5000
 ```
+
+仍使用标准命令入口：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --verify "git diff --check"
+```
+
+`--profile auto` 会根据改动规模和风险自动选择单次审核或并行分片加汇总审核。
 
 企业内部网关：
 
@@ -565,7 +586,7 @@ AI_REVIEW_API_STYLE=chat
 - 内置脱敏规则只覆盖常见环境变量、HTTP bearer token、JSON key 字段和 CLI 参数形态；它用于降低误传风险，不应被视为完整 DLP 或安全边界。
 - CLI command 只能来自可信配置。
 - 审核上下文过大时，优先用 `--path` 缩小范围，而不是盲目增大限制。
-- 高风险改动建议启用双模型和 `--profile high-accuracy`。
+- 高风险改动建议启用双模型，并继续使用 `--profile auto` 让脚本自动升级审核策略。
 
 ## `.ai-reviewignore`
 

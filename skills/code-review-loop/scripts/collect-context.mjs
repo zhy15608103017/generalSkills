@@ -100,6 +100,10 @@ export function parseArgs(argv) {
     } else if (arg === "--history-limit" && next) {
       args.historyLimit = Number(next);
       index += 1;
+    } else if (arg === "--max-shards" && next) {
+      args.maxShards = Number(next);
+      args.explicitOptions.maxShards = true;
+      index += 1;
     } else if (arg === "--max-review-rounds" && next) {
       args.maxReviewRounds = parseMaxReviewRoundsValue(next);
       args.explicitOptions.maxReviewRounds = true;

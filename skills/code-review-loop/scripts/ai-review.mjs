@@ -5,6 +5,7 @@ import {
   collectReviewContext,
   getGitRoot,
   parseArgs,
+  redactSecrets,
   renderReviewBrief,
   resolveMaxReviewRounds,
   resolveReviewLimits,
@@ -36,23 +37,46 @@ import {
 } from "./requirement-audit.mjs";
 import { assertRequestContext } from "./request-context.mjs";
 import { renderMarkdownReport } from "./review-report.mjs";
+import { createStatusReporter } from "./review-status.mjs";
 import { formatReviewRunId } from "./time-format.mjs";
 
 export { resolveMaxReviewRounds };
 
 async function main() {
+  let statusReporter = null;
+  try {
   const options = parseArgs(process.argv.slice(2));
   const root = await getGitRoot();
+  const outDir = path.resolve(root, options.outDir || ".ai-review");
+  await fs.mkdir(outDir, { recursive: true });
+  statusReporter = createStatusReporter({
+    outDir,
+    heartbeatMs: resolveStatusHeartbeatMs(),
+  });
+  await statusReporter.update({
+    phase: "start",
+    message: "初始化 AI 审核运行。",
+  });
+
   if (!options.dryRun) {
     await assertRequestContext(root, options);
   }
-  const context = await collectReviewContext(options);
+  const context = await statusReporter.run({
+    phase: "collect_context",
+    message: "收集 Git diff、文件上下文和验证输出。",
+  }, () => collectReviewContext(options));
   await loadEnvFile(context.root);
   context.reviewLimits = resolveReviewLimits(options);
   const brief = renderReviewBrief(context);
-  const outDir = path.resolve(context.root, options.outDir || ".ai-review");
-  await fs.mkdir(outDir, { recursive: true });
   await fs.writeFile(path.join(outDir, "latest-brief.md"), brief, "utf8");
+  await statusReporter.update({
+    phase: "prepare_brief",
+    message: `已生成审核 brief: ${formatBytes(byteLength(brief))}。`,
+    changedFiles: context.changedFiles.length,
+    briefBytes: byteLength(brief),
+    diffBytes: byteLength(context.diff || ""),
+    profile: context.profile?.selected || options.profile || "standard",
+  });
 
   if (!options.allowEmpty && !options.dryRun && context.changedFiles.length === 0) {
     throw new Error("未找到可审核的本地变更。只有在确实需要空审核时才传入 --allow-empty。");
@@ -79,6 +103,11 @@ async function main() {
     };
     const outputMeta = await writeOutputs(outDir, dryResult, brief, options);
     await appendHistory(outDir, dryResult, options, context, { primary: providerOptions, second: null }, outputMeta);
+    await statusReporter.complete({
+      phase: "complete",
+      message: "dry-run 已完成。",
+      verdict: dryResult.verdict,
+    });
     process.stdout.write(renderConsoleSummary(dryResult, outDir));
     return;
   }
@@ -93,6 +122,11 @@ async function main() {
     await writeRequirementAuditArtifacts(outDir, result, renderRequirementAuditBrief(context));
     const outputMeta = await writeOutputs(outDir, result, brief, options);
     await appendHistory(outDir, result, options, context, { primary: fallbackResolved, second: null }, outputMeta);
+    await statusReporter.complete({
+      phase: "complete",
+      message: "主审模型配置解析失败。",
+      verdict: result.verdict,
+    });
     process.stdout.write(renderConsoleSummary(result, outDir));
     process.exitCode = 3;
     return;
@@ -105,12 +139,18 @@ async function main() {
     assets,
     options,
     primaryResolved,
+    statusReporter,
   });
 
   if (requirementAudit.result.verdict !== "pass") {
     const result = decorateRequirementAuditBlock(requirementAudit.result);
     const outputMeta = await writeOutputs(outDir, result, requirementAudit.brief, options);
     await appendHistory(outDir, result, options, context, { primary: primaryResolved, second: null }, outputMeta);
+    await statusReporter.complete({
+      phase: "complete",
+      message: "需求理解审核未通过，已跳过代码审核。",
+      verdict: result.verdict,
+    });
     process.stdout.write(renderConsoleSummary(result, outDir));
     if (result.verdict === "fail") {
       process.exitCode = 2;
@@ -120,24 +160,35 @@ async function main() {
     return;
   }
 
-  const reviewRun = await runReviewPasses({
+  const reviewRun = await runAutoReviewPasses({
+    context,
     brief,
     assets,
     options,
     primaryResolved,
     secondResolved,
     secondReviewSetup,
+    statusReporter,
   });
   const result = withRequirementAuditPass(reviewRun.result, requirementAudit.result);
 
   const outputMeta = await writeOutputs(outDir, result, brief, options);
   await appendHistory(outDir, result, options, context, reviewRun.resolved, outputMeta);
+  await statusReporter.complete({
+    phase: "complete",
+    message: `AI 审核完成: ${formatVerdict(result.verdict)}。`,
+    verdict: result.verdict,
+  });
   process.stdout.write(renderConsoleSummary(result, outDir));
 
   if (result.verdict === "fail") {
     process.exitCode = 2;
   } else if (result.verdict === "needs_human") {
     process.exitCode = 3;
+  }
+  } catch (error) {
+    await statusReporter?.fail(error, { phase: "failed" });
+    throw error;
   }
 }
 
@@ -148,6 +199,7 @@ export async function runRequirementAudit({
   options,
   primaryResolved,
   callReviewModelFn = callReviewModel,
+  statusReporter = null,
 }) {
   const auditBrief = renderRequirementAuditBrief(context);
   const auditPrompt = await loadRequirementAuditorPrompt();
@@ -155,6 +207,11 @@ export async function runRequirementAudit({
   if (!options.noRequirementAuditCache) {
     const cachedResult = await readCachedRequirementAudit(outDir, cacheKey);
     if (cachedResult) {
+      await statusReporter?.update({
+        phase: "requirement_audit",
+        message: "复用已缓存的需求理解审核结果。",
+        verdict: cachedResult.verdict,
+      });
       await writeRequirementAuditArtifacts(outDir, cachedResult, auditBrief);
       return { result: cachedResult, brief: auditBrief };
     }
@@ -162,13 +219,19 @@ export async function runRequirementAudit({
 
   let result;
   try {
-    result = attachReviewerSource(await callReviewModelWithMalformedRetry({
+    result = attachReviewerSource(await runWithOptionalStatus(statusReporter, {
+      phase: "requirement_audit",
+      message: `需求理解审核中: ${primaryResolved?.provider || "unknown"}/${primaryResolved?.model || "unknown"}。`,
+      reviewer: "requirement-auditor",
+      provider: primaryResolved?.provider || "unknown",
+      model: primaryResolved?.model || "unknown",
+    }, () => callReviewModelWithMalformedRetry({
       brief: auditBrief,
       systemPrompt: auditPrompt,
       schema: assets.schema,
       options,
       providersConfig: assets.providersConfig,
-    }, callReviewModelFn), reviewerSource("requirement-auditor", primaryResolved));
+    }, callReviewModelFn)), reviewerSource("requirement-auditor", primaryResolved));
   } catch (error) {
     result = {
       verdict: "needs_human",
@@ -193,7 +256,57 @@ export async function runRequirementAudit({
     await clearCachedRequirementAudit(outDir, cacheKey);
   }
   await writeRequirementAuditArtifacts(outDir, result, auditBrief);
+  await statusReporter?.update({
+    phase: "requirement_audit",
+    message: `需求理解审核完成: ${formatVerdict(result.verdict)}。`,
+    verdict: result.verdict,
+  });
   return { result, brief: auditBrief };
+}
+
+export async function runAutoReviewPasses({
+  context,
+  brief,
+  assets,
+  options,
+  primaryResolved,
+  secondResolved,
+  secondReviewSetup = null,
+  callReviewModelFn = callReviewModel,
+  statusReporter = null,
+}) {
+  const strategy = resolveAutoReviewStrategy({ context, brief, options });
+  await statusReporter?.update({
+    phase: "choose_review_strategy",
+    message: renderStrategyMessage(strategy),
+    strategy: strategy.mode,
+    strategyReasons: strategy.reasons,
+  });
+
+  if (strategy.mode !== "sharded") {
+    return await runReviewPasses({
+      brief,
+      assets,
+      options,
+      primaryResolved,
+      secondResolved,
+      secondReviewSetup,
+      callReviewModelFn,
+      statusReporter,
+    });
+  }
+
+  return await runShardedReviewPasses({
+    context,
+    assets,
+    options,
+    primaryResolved,
+    secondResolved,
+    secondReviewSetup,
+    callReviewModelFn,
+    statusReporter,
+    strategy,
+  });
 }
 
 export async function runReviewPasses({
@@ -204,6 +317,7 @@ export async function runReviewPasses({
   secondResolved,
   secondReviewSetup = null,
   callReviewModelFn = callReviewModel,
+  statusReporter = null,
 }) {
   const resolvedSecondReviewSetup = secondReviewSetup || resolveSecondReviewSetup(options, assets.providersConfig);
   const secondOptions = resolvedSecondReviewSetup.options;
@@ -218,6 +332,7 @@ export async function runReviewPasses({
     resolved: primaryResolved,
     reviewer: "primary",
     callReviewModelFn,
+    statusReporter,
   });
   const secondReview = () => runSingleReview({
     brief,
@@ -226,6 +341,7 @@ export async function runReviewPasses({
     resolved: effectiveSecondResolved,
     reviewer: "second",
     callReviewModelFn,
+    statusReporter,
   });
 
   if (secondConfigFailure && secondReviewMode === "always") {
@@ -344,14 +460,400 @@ export async function runReviewPasses({
   });
 }
 
-async function runSingleReview({ brief, assets, options, resolved, reviewer, callReviewModelFn }) {
-  return attachReviewerSource(await callReviewModelWithMalformedRetry({
+async function runShardedReviewPasses({
+  context,
+  assets,
+  options,
+  primaryResolved,
+  secondResolved,
+  secondReviewSetup = null,
+  callReviewModelFn = callReviewModel,
+  statusReporter = null,
+  strategy,
+}) {
+  const shards = buildReviewShards(context.changedFiles, strategy.maxShards, context.diff);
+  await statusReporter?.update({
+    phase: "sharded_review",
+    message: `自动拆成 ${shards.length} 个分片并行审核。`,
+    shardCount: shards.length,
+    strategyReasons: strategy.reasons,
+  });
+
+  const shardOptions = { ...options, secondReviewMode: "off" };
+  const shardOutcomes = await Promise.all(shards.map(async (shard, index) => {
+    const shardBrief = renderShardBrief(context, shard, index, shards.length);
+    return await settleReview(runSingleReview({
+      brief: shardBrief,
+      assets,
+      options: shardOptions,
+      resolved: primaryResolved,
+      reviewer: "primary",
+      callReviewModelFn,
+      statusReporter: shardStatusReporter(statusReporter, index, shards.length, shard),
+    }), {
+      phase: "code_review",
+      reviewer: "primary",
+      resolved: primaryResolved,
+    });
+  }));
+
+  const mergedShardRun = mergeShardOutcomes(shardOutcomes, shards, primaryResolved);
+  if (!mergedShardRun.result || mergedShardRun.result.verdict === "needs_human") {
+    return mergedShardRun;
+  }
+
+  const aggregationBrief = renderAggregationBrief({
+    context,
+    shards,
+    shardOutcomes,
+    mergedResult: mergedShardRun.result,
+  });
+  await statusReporter?.update({
+    phase: "aggregate_review",
+    message: "分片完成，正在汇总跨模块风险。",
+    shardCount: shards.length,
+  });
+
+  const aggregationRun = await runReviewPasses({
+    brief: aggregationBrief,
+    assets,
+    options,
+    primaryResolved,
+    secondResolved,
+    secondReviewSetup,
+    callReviewModelFn,
+    statusReporter,
+  });
+
+  return {
+    result: withReviewNotes(
+      mergeReviewResults(mergedShardRun.result, aggregationRun.result),
+      [
+        `自动分片审核: ${shards.length} 个分片并行完成，随后运行汇总审核。`,
+        ...strategy.reasons.map((reason) => `自动分片原因: ${reason}`),
+      ],
+    ),
+    resolved: aggregationRun.resolved || {
+      primary: primaryResolved,
+      second: null,
+    },
+  };
+}
+
+export function resolveAutoReviewStrategy({ context = {}, brief = "", options = {} }) {
+  const maxShards = options.explicitOptions?.maxShards
+    ? normalizeMaxShards(options.maxShards, 4)
+    : normalizeMaxShards(readEnv("AI_REVIEW_MAX_SHARDS"), 4);
+  const changedFiles = context.changedFiles || [];
+  const briefBytes = byteLength(brief);
+  const diffBytes = byteLength(context.diff || "");
+  const reasons = [];
+  const requestedProfile = options.profile || "standard";
+
+  if (requestedProfile !== "auto") {
+    return {
+      mode: "single",
+      requested: "auto",
+      maxShards,
+      reasons: [`当前 profile 为 ${requestedProfile}，仅 --profile auto 启用自动分片`],
+    };
+  }
+
+  if (maxShards < 2) {
+    return { mode: "single", requested: "auto", maxShards, reasons: ["自动分片上限小于 2，使用单次审核"] };
+  }
+
+  if (changedFiles.length >= 12) reasons.push(`变更文件数量 ${changedFiles.length} >= 12`);
+  if (diffBytes >= 260000) reasons.push(`diff 大小 ${formatBytes(diffBytes)} >= 254KB`);
+  if (briefBytes >= 450000) reasons.push(`brief 大小 ${formatBytes(briefBytes)} >= 439KB`);
+  if (context.profile?.selected === "high-accuracy" && changedFiles.length >= 8) {
+    reasons.push("auto profile 已升级为 high-accuracy 且变更文件较多");
+  }
+
+  if (changedFiles.length < 2) {
+    return { mode: "single", requested: "auto", maxShards, reasons: ["变更文件少于 2 个，不拆分"] };
+  }
+
+  return {
+    mode: reasons.length ? "sharded" : "single",
+    requested: "auto",
+    maxShards,
+    reasons: reasons.length ? reasons : ["未达到自动分片阈值"],
+  };
+}
+
+export function buildReviewShards(changedFiles = [], maxShards = 4, diff = "") {
+  const files = [...new Set(changedFiles)].filter(Boolean);
+  const shardCount = Math.min(Math.max(1, normalizeMaxShards(maxShards, 4)), files.length);
+  if (shardCount <= 1) return [{ label: "all", files }];
+  const weights = diffWeightsByFile(diff);
+  const weightOf = (file) => Math.max(1, weights.get(file) || 1);
+  const totalWeight = files.reduce((sum, file) => sum + weightOf(file), 0);
+  const targetWeight = Math.max(1, Math.ceil(totalWeight / shardCount));
+
+  const shards = Array.from({ length: shardCount }, (_, index) => ({
+    label: `shard-${index + 1}`,
+    files: [],
+    weight: 0,
+  }));
+
+  const items = buildShardItems(files, weightOf, targetWeight)
+    .sort((a, b) => b.weight - a.weight || a.files[0].localeCompare(b.files[0]));
+  for (const item of items) {
+    const target = shards.reduce((smallest, current) =>
+      current.weight < smallest.weight ? current : smallest
+    );
+    target.files.push(...item.files);
+    target.weight += item.weight;
+  }
+
+  return shards
+    .filter((shard) => shard.files.length > 0)
+    .map(({ label, files }) => ({ label, files }));
+}
+
+function buildShardItems(files, weightOf, targetWeight) {
+  const byModule = new Map();
+  for (const file of files) {
+    const module = shardModulePath(file);
+    const entry = byModule.get(module) || [];
+    entry.push(file);
+    byModule.set(module, entry);
+  }
+
+  const items = [];
+  for (const groupFiles of byModule.values()) {
+    const sortedFiles = groupFiles.sort((a, b) => a.localeCompare(b));
+    const groupWeight = sortedFiles.reduce((sum, file) => sum + weightOf(file), 0);
+    if (groupWeight <= targetWeight) {
+      items.push({ files: sortedFiles, weight: groupWeight });
+      continue;
+    }
+
+    let chunk = [];
+    let chunkWeight = 0;
+    for (const file of sortedFiles) {
+      const fileWeight = weightOf(file);
+      if (chunk.length && chunkWeight + fileWeight > targetWeight) {
+        items.push({ files: chunk, weight: chunkWeight });
+        chunk = [];
+        chunkWeight = 0;
+      }
+      chunk.push(file);
+      chunkWeight += fileWeight;
+    }
+    if (chunk.length) items.push({ files: chunk, weight: chunkWeight });
+  }
+
+  return items;
+}
+
+function mergeShardOutcomes(shardOutcomes, shards, primaryResolved) {
+  const successful = shardOutcomes.filter((outcome) => outcome.ok).map((outcome) => outcome.result);
+  const failures = compactReviewerFailures(shardOutcomes.filter((outcome) => !outcome.ok).map((outcome) => outcome.failure));
+  if (!successful.length) {
+    return {
+      result: {
+        verdict: "needs_human",
+        summary: "所有自动分片审核都未返回可用结果，需要人工确认。",
+        blocking_findings: [],
+        warnings: [],
+        verification_notes: ["自动分片审核失败，未运行汇总审核。"],
+        reviewer_failures: failures,
+        confidence: 0,
+      },
+      resolved: { primary: primaryResolved, second: null },
+    };
+  }
+
+  const merged = successful.reduce((acc, item) => acc ? mergeReviewResults(acc, item) : item, null);
+  if (failures.length) {
+    return {
+      result: withReviewerFailures(
+        withReviewNotes({
+          ...merged,
+          verdict: "needs_human",
+          summary: `自动分片审核有 ${failures.length} 个分片未返回可用结果，需要人工确认未审核文件。`,
+        }, [
+          `自动分片审核未完整完成: ${successful.length}/${shards.length} 个分片返回可用结果。`,
+          ...failedShardNotes(shardOutcomes, shards),
+        ]),
+        failures,
+      ),
+      resolved: { primary: primaryResolved, second: null },
+    };
+  }
+
+  return {
+    result: withReviewerFailures(
+      withReviewNotes(merged, [
+        `自动分片审核完成: ${successful.length}/${shards.length} 个分片返回可用结果。`,
+      ]),
+      failures,
+    ),
+    resolved: { primary: primaryResolved, second: null },
+  };
+}
+
+function failedShardNotes(shardOutcomes, shards) {
+  return shardOutcomes
+    .map((outcome, index) => outcome.ok ? null : `分片 ${index + 1} 未完成审核: ${shards[index]?.files?.join(", ") || "未知文件"}`)
+    .filter(Boolean);
+}
+
+function renderShardBrief(context, shard, index, total) {
+  const shardFiles = new Set(shard.files);
+  return renderReviewBrief({
+    ...context,
+    scope: {
+      ...context.scope,
+      paths: shard.files,
+    },
+    docs: [
+      ...(context.docs || []),
+      {
+        label: "自动分片说明",
+        path: `.ai-review/generated-shard-${index + 1}.md`,
+        content: [
+          `这是自动分片审核 ${index + 1}/${total}。`,
+          "只审查本分片列出的文件及其局部 diff。",
+          "跨分片一致性、需求覆盖和集成风险会在分片完成后的汇总审核中检查。",
+        ].join("\n"),
+      },
+    ],
+    changedFiles: shard.files,
+    fileContexts: (context.fileContexts || []).filter((item) => shardFiles.has(item.path)),
+    diff: extractDiffForFiles(context.diff || "", shardFiles),
+    maxBriefBytes: context.maxBriefBytes,
+  });
+}
+
+function renderAggregationBrief({ context, shards, shardOutcomes, mergedResult }) {
+  const shardSummaries = shardOutcomes.map((outcome, index) => {
+    const shard = shards[index];
+    if (!outcome.ok) {
+      return `### 分片 ${index + 1}: ${shard.files.join(", ")}\n\n失败: ${errorMessage(outcome.error)}`;
+    }
+    return [
+      `### 分片 ${index + 1}: ${shard.files.join(", ")}`,
+      "",
+      `结论: ${outcome.result.verdict}`,
+      `摘要: ${outcome.result.summary || "未提供摘要。"}`,
+      `阻塞问题: ${(outcome.result.blocking_findings || []).length}`,
+      `提醒: ${(outcome.result.warnings || []).length}`,
+    ].join("\n");
+  }).join("\n\n");
+
+  return redactSecrets(`# 自动分片审核汇总上下文
+
+## 目标
+
+请基于需求、整体变更文件列表、分片审核结果，重点检查跨分片一致性、集成风险、需求覆盖遗漏，以及分片审核可能漏掉的 P0/P1 问题。不要重复报告分片中已经明确覆盖且无需补充的问题。
+
+## 仓库
+
+${context.root}
+
+## 整体变更文件
+
+${(context.changedFiles || []).map((file) => `- ${file}`).join("\n") || "未检测到变更文件。"}
+
+## 原始需求、设计与计划
+
+${(context.docs || []).map((doc) => `### ${doc.label}: ${doc.path}\n\n${doc.content}`).join("\n\n") || "未提供需求、设计、计划或额外文档。"}
+
+## 分片划分
+
+${shards.map((shard, index) => `- 分片 ${index + 1}: ${shard.files.join(", ")}`).join("\n")}
+
+## 分片审核结果摘要
+
+${shardSummaries}
+
+## 分片合并后的当前结论
+
+结论: ${mergedResult.verdict}
+
+摘要:
+${mergedResult.summary || "未提供摘要。"}
+
+阻塞问题:
+${renderFindingsForAggregation(mergedResult.blocking_findings)}
+
+提醒:
+${renderFindingsForAggregation(mergedResult.warnings)}
+`);
+}
+
+function extractDiffForFiles(diff, files) {
+  if (!diff || !files?.size) return "";
+  const blocks = diff.split(/(?=^diff --git )/m);
+  const selected = blocks.filter((block) => {
+    const match = block.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+    if (!match) return false;
+    return files.has(match[1]) || files.has(match[2]);
+  });
+  return selected.join("").trim() || "[本分片没有可提取的局部 diff。]";
+}
+
+function diffWeightsByFile(diff) {
+  const weights = new Map();
+  if (!diff) return weights;
+  for (const block of diff.split(/(?=^diff --git )/m)) {
+    const match = block.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+    if (!match) continue;
+    const weight = byteLength(block);
+    for (const file of [match[1], match[2]]) {
+      if (file && file !== "/dev/null") {
+        weights.set(file, Math.max(weights.get(file) || 0, weight));
+      }
+    }
+  }
+  return weights;
+}
+
+function renderFindingsForAggregation(findings = []) {
+  if (!findings.length) return "- 无";
+  return findings.map((finding) => [
+    `- [${finding.severity || "P?"}] ${finding.title || "未命名问题"}`,
+    `  - file: ${finding.file || "unknown"}`,
+    `  - impact: ${finding.impact || "未提供影响说明"}`,
+  ].join("\n")).join("\n");
+}
+
+function shardStatusReporter(statusReporter, index, total, shard) {
+  if (!statusReporter) return null;
+  return {
+    run: (partial, callback) => statusReporter.run({
+      ...partial,
+      phase: "sharded_review",
+      message: `分片 ${index + 1}/${total} 审核中: ${shard.files.length} 个文件。`,
+      shard: index + 1,
+      shardCount: total,
+      shardFiles: shard.files,
+    }, callback),
+    update: (...args) => statusReporter.update(...args),
+  };
+}
+
+function renderStrategyMessage(strategy) {
+  return `自动选择 ${strategy.mode === "sharded" ? "分片并行 + 汇总审核" : "单次审核"}。${strategy.reasons.join("；")}。`;
+}
+
+async function runSingleReview({ brief, assets, options, resolved, reviewer, callReviewModelFn, statusReporter = null }) {
+  return attachReviewerSource(await runWithOptionalStatus(statusReporter, {
+    phase: reviewer === "second" ? "second_review" : "primary_review",
+    message: `${reviewerLabel(reviewer)}审核中: ${resolved?.provider || "unknown"}/${resolved?.model || "unknown"}。`,
+    reviewer,
+    provider: resolved?.provider || "unknown",
+    model: resolved?.model || "unknown",
+  }, () => callReviewModelWithMalformedRetry({
     brief,
     systemPrompt: assets.systemPrompt,
     schema: assets.schema,
     options,
     providersConfig: assets.providersConfig,
-  }, callReviewModelFn), reviewerSource(reviewer, resolved));
+  }, callReviewModelFn)), reviewerSource(reviewer, resolved));
 }
 
 async function settleReview(promise, failureMeta = {}) {
@@ -799,6 +1301,55 @@ function readEnv(name) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function runWithOptionalStatus(statusReporter, status, callback) {
+  if (!statusReporter) return callback();
+  return statusReporter.run(status, callback);
+}
+
+function resolveStatusHeartbeatMs() {
+  const value = Number(readEnv("AI_REVIEW_STATUS_HEARTBEAT_MS"));
+  return Number.isFinite(value) && value >= 0 ? value : 15000;
+}
+
+function normalizeMaxShards(...values) {
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isInteger(parsed) && parsed >= 1) return Math.min(parsed, 8);
+  }
+  return 4;
+}
+
+function topLevelPath(file) {
+  const normalized = String(file || "").replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length <= 1) return normalized || "root";
+  return parts[0];
+}
+
+function shardModulePath(file) {
+  const normalized = String(file || "").replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length <= 2) return topLevelPath(normalized);
+  return parts.slice(0, -1).join("/");
+}
+
+function byteLength(text) {
+  return Buffer.byteLength(String(text || ""), "utf8");
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value}B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)}KB`;
+  return `${(value / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function reviewerLabel(reviewer) {
+  if (reviewer === "second") return "二审模型";
+  if (reviewer === "requirement-auditor") return "需求理解审核员";
+  return "主审模型";
+}
+
 async function callReviewModelWithMalformedRetry(reviewOptions, callReviewModelFn = callReviewModel) {
   const retryBudget = resolveReviewerRetryBudget(reviewOptions);
   const attempts = retryBudget.retries + 1;
@@ -914,6 +1465,8 @@ function dedupeFindings(findings) {
   const byKey = new Map();
   for (const finding of findings) {
     const key = JSON.stringify([
+      stableFindingText(finding.file),
+      finding.line ?? null,
       stableFindingText(finding.title),
       stableFindingText(finding.evidence),
       stableFindingText(finding.impact),

@@ -40,6 +40,12 @@ The gate must pass before code is reviewed. If it returns `fail` or `needs_human
 
 Successful audits are cached; the gate skips re-auditing when context, prompt, and model have not changed. To force a fresh requirement audit, pass `--no-requirement-audit-cache`.
 
+## Progress and Automatic Strategy
+
+The standard `--profile auto` entrypoint chooses the review strategy automatically. Small and medium changes run a single code review. Large changes are split into parallel file shards and followed by one aggregate review that checks cross-shard integration, requirement coverage, and missed P0/P1 risks.
+
+During each run the script writes progress to `.ai-review/latest-status.json` and `.ai-review/latest-status.md`, and prints heartbeat lines to stderr while waiting for model calls. These status artifacts are local and sensitive like other `.ai-review/` outputs.
+
 ## Default Flow
 
 1. Create or update `.ai-review/review-context/current-request.md` with the original request, user corrections, current agent understanding, anti-examples, design, non-goals, acceptance criteria, and suggested verification.
@@ -52,11 +58,12 @@ Successful audits are cached; the gate skips re-auditing when context, prompt, a
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --verify "git diff --check"
 ```
 
-6. Read `.ai-review/latest-result.json` and `.ai-review/latest-report.md`; inspect requirement-audit artifacts when the gate blocks.
-7. Report all findings, but fix blocking `P0` and `P1` findings before completion.
-8. Fix blocking findings yourself, then rerun local verification.
-9. Repeat the review loop up to the configured maximum (`3` by default; `infinity` means no round cap).
-10. If blocking findings remain after the configured maximum, stop and return the remaining issues for human decision.
+6. While the run is active, inspect `.ai-review/latest-status.md` or terminal heartbeat output if you need progress.
+7. Read `.ai-review/latest-result.json` and `.ai-review/latest-report.md`; inspect requirement-audit artifacts when the gate blocks.
+8. Report all findings, but fix blocking `P0` and `P1` findings before completion.
+9. Fix blocking findings yourself, then rerun local verification.
+10. Repeat the review loop up to the configured maximum (`3` by default; `infinity` means no round cap).
+11. If blocking findings remain after the configured maximum, stop and return the remaining issues for human decision.
 
 ## Commands
 

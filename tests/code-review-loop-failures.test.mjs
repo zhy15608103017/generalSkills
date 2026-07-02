@@ -875,6 +875,33 @@ test("ai-review writes structured failure output when primary provider config is
   }
 });
 
+test("ai-review marks latest status failed when request context is missing", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-missing-context-"));
+  try {
+    await execFileAsync("git", ["init"], { cwd: tempDir });
+
+    const scriptPath = path.join(repoRoot, "skills", "code-review-loop", "scripts", "ai-review.mjs");
+    await execFileAsync(
+      process.execPath,
+      [scriptPath, "--allow-empty"],
+      { cwd: tempDir, windowsHide: true },
+    ).then(
+      () => assert.fail("expected ai-review to fail without request context"),
+      (error) => assert.equal(error.code, 1),
+    );
+
+    const status = JSON.parse(await readFile(path.join(tempDir, ".ai-review", "latest-status.json"), "utf8"));
+    const statusMarkdown = await readFile(path.join(tempDir, ".ai-review", "latest-status.md"), "utf8");
+    assert.equal(status.status, "failed");
+    assert.equal(status.phase, "failed");
+    assert.match(status.message, /缺少审核需求上下文/);
+    assert.match(statusMarkdown, /状态: failed/);
+    assert.match(statusMarkdown, /缺少审核需求上下文/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("ai-review dry-run can inspect a brief before request context exists", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-dry-run-"));
   try {
