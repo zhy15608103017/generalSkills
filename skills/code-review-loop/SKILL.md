@@ -30,6 +30,8 @@ For full Markdown context, write from a UTF-8 file:
 node .agents/skills/code-review-loop/scripts/write-review-context.mjs --from-file .ai-review/review-context/draft-request.md
 ```
 
+Structured field flags such as `--request` and `--acceptance` are limited to 4000 characters each. If a field is longer, the writer fails with `FIELD_TOO_LONG`, removes the target output file so stale context is not reused, and avoids writing an incomplete `current-request.md`; save the full Markdown as UTF-8 and rerun with `--from-file <path>`. Use `--allow-truncate` only when an explicitly incomplete context is acceptable.
+
 For a new feature, overwrite the current context instead of appending old requirements. Keep `current-design.md` and `current-plan.md` concise when needed; pass large extra docs with `--doc` only when the review needs them.
 
 ## Requirement Understanding Gate

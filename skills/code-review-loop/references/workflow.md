@@ -97,6 +97,8 @@ test -f .ai-review/review-context/current-request.md && echo "EXISTS" || echo "M
 node .agents/skills/code-review-loop/scripts/write-review-context.mjs --from-file .ai-review/review-context/draft-request.md
 ```
 
+`--request`、`--corrections`、`--understanding`、`--anti-examples`、`--design`、`--acceptance`、`--non-goals` 和 `--verification` 每个结构化字段最多 4000 字符。字段超长时，`write-review-context.mjs` 会以 `FIELD_TOO_LONG` 失败，清理目标输出文件以避免复用旧上下文，且不会写入半截 `current-request.md`；请把完整 Markdown 保存为 UTF-8 文件后改用 `--from-file <path>`。只有在明确接受上下文不完整时，才使用 `--allow-truncate`。
+
 Windows PowerShell 把非 ASCII Markdown 直接 pipe 给原生进程时，可能会在 Node 收到内容前把中文替换成 `?`。在 Windows 上写完整 Markdown 上下文时，优先使用 UTF-8 文件和 `--from-file`。
 
 `.ai-review/` 下生成的人读内容默认使用简体中文，包括 review context、brief、reports、summaries、findings 和 verification notes。代码标识符、命令、文件路径、JSON 字段、枚举值和外部错误文本在更清晰时保留原文。

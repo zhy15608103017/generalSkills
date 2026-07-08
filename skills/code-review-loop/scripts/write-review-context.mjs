@@ -3,15 +3,46 @@ import path from "node:path";
 
 const DEFAULT_OUT = ".ai-review/review-context/current-request.md";
 const MAX_FIELD_CHARS = 4000;
+const FIELD_SPECS = [
+  ["request", "--request"],
+  ["corrections", "--corrections"],
+  ["understanding", "--understanding"],
+  ["antiExamples", "--anti-examples"],
+  ["design", "--design"],
+  ["acceptance", "--acceptance"],
+  ["nonGoals", "--non-goals"],
+  ["verification", "--verification"],
+];
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const outPath = path.resolve(process.cwd(), args.out || DEFAULT_OUT);
-  const content = await readContent(args);
+  const content = await readContentOrClearStaleOutput(args, outPath);
 
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.writeFile(outPath, normalizeMarkdown(content), "utf8");
   process.stdout.write(`已写入审核上下文: ${outPath}\n`);
+}
+
+async function readContentOrClearStaleOutput(args, outPath) {
+  try {
+    return await readContent(args);
+  } catch (error) {
+    if (error?.code === "FIELD_TOO_LONG") {
+      await removeStaleOutput(outPath, error);
+    }
+    throw error;
+  }
+}
+
+async function removeStaleOutput(outPath, cause) {
+  try {
+    await fs.rm(outPath, { force: true });
+  } catch (error) {
+    throw new Error(
+      `${cause.message} Failed to remove stale output file ${outPath}: ${error.message}`,
+    );
+  }
 }
 
 function parseArgs(argv) {
@@ -23,6 +54,8 @@ function parseArgs(argv) {
 
     if (arg === "--from-stdin") {
       args.fromStdin = true;
+    } else if (arg === "--allow-truncate") {
+      args.allowTruncate = true;
     } else if (arg === "--from-file" && next) {
       args.fromFile = next;
       index += 1;
@@ -83,41 +116,43 @@ async function readContent(args) {
 }
 
 function renderContext(args) {
+  const fields = prepareFields(args);
+
   return `# 当前审核需求上下文
 
 > 供 code-review-loop 使用。审核模型必须先判断“当前模型理解”是否符合用户原始请求和后续纠正，再审核代码。
 
 ## 用户原始请求（原文）
 
-${compact(args.request) || "请补充本次用户原始请求，尽量保留关键原文。"}
+${fields.request || "请补充本次用户原始请求，尽量保留关键原文。"}
 
 ## 用户后续纠正/澄清（原文）
 
-${compact(args.corrections) || "无。"}
+${fields.corrections || "无。"}
 
 ## 当前模型理解（待审核，不得当作事实）
 
-${compact(args.understanding) || "请补充当前模型对用户意图的理解。审核模型会先判断这一理解是否忠实于用户原文和纠正。"}
+${fields.understanding || "请补充当前模型对用户意图的理解。审核模型会先判断这一理解是否忠实于用户原文和纠正。"}
 
 ## 明确反例/非期望行为
 
-${compact(args.antiExamples) || "无。"}
+${fields.antiExamples || "无。"}
 
 ## 设计结论
 
-${compact(args.design) || "请补充本次实现采用的设计方案、关键边界和取舍。"}
+${fields.design || "请补充本次实现采用的设计方案、关键边界和取舍。"}
 
 ## 非目标
 
-${compact(args.nonGoals) || "无。"}
+${fields.nonGoals || "无。"}
 
 ## 验收标准
 
-${compact(args.acceptance) || "请补充审核模型应据此判断是否满足需求的验收标准。"}
+${fields.acceptance || "请补充审核模型应据此判断是否满足需求的验收标准。"}
 
 ## 建议验证
 
-${compact(args.verification) || "请补充本次变更建议运行的验证命令。"}
+${fields.verification || "请补充本次变更建议运行的验证命令。"}
 `;
 }
 
@@ -134,10 +169,49 @@ function normalizeMarkdown(content) {
   return `${trimmed}\n`;
 }
 
-function compact(value = "") {
-  const text = String(value).trim();
-  if (text.length <= MAX_FIELD_CHARS) return text;
-  return `${text.slice(0, MAX_FIELD_CHARS)}\n\n[已截断：单字段超过 ${MAX_FIELD_CHARS} 字符，请改写为摘要。]`;
+function prepareFields(args) {
+  const fields = {};
+  const oversized = [];
+
+  for (const [key, flag] of FIELD_SPECS) {
+    const text = String(args[key] || "").trim();
+    if (text.length > MAX_FIELD_CHARS) {
+      if (args.allowTruncate) {
+        fields[key] = truncateField(text);
+        continue;
+      }
+      oversized.push({ flag, length: text.length });
+      continue;
+    }
+    fields[key] = text;
+  }
+
+  if (oversized.length) {
+    throw Object.assign(new Error(formatOversizedFieldError(oversized)), {
+      code: "FIELD_TOO_LONG",
+    });
+  }
+
+  return fields;
+}
+
+function formatOversizedFieldError(fields) {
+  const details = fields
+    .map(({ flag, length }) => `${flag}=${length}`)
+    .join(", ");
+  return [
+    `FIELD_TOO_LONG: ${details}; limit=${MAX_FIELD_CHARS} chars per structured field.`,
+    "Write the complete Markdown review context to a UTF-8 file and rerun with --from-file <path>.",
+    "Use --allow-truncate only when an intentionally incomplete context is acceptable.",
+  ].join(" ");
+}
+
+function truncateField(text) {
+  return [
+    text.slice(0, MAX_FIELD_CHARS),
+    "",
+    `[CONTEXT_INCOMPLETE: 字段超过 ${MAX_FIELD_CHARS} 字符，已因 --allow-truncate 显式截断。请优先改用 --from-file 写入完整上下文。]`,
+  ].join("\n");
 }
 
 function looksQuestionMarkCorrupted(content) {
