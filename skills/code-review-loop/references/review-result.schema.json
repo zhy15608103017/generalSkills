@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AI Code Review Result",
+  "title": "AI 代码审查结果",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,7 +18,7 @@
     },
     "verdict_label": {
       "type": "string",
-      "description": "Chinese display label added by the runner in final output."
+      "description": "由本地运行器在最终输出中补充的中文展示标签。"
     },
     "summary": {
       "type": "string"
@@ -43,7 +43,7 @@
     },
     "reviewer_failures": {
       "type": "array",
-      "description": "Runner-owned model invocation failures, added by the local review script rather than the reviewer model.",
+      "description": "由本地审查脚本补充的模型调用失败信息，不由审查模型直接生成。",
       "items": {
         "$ref": "#/$defs/reviewer_failure"
       }
@@ -93,7 +93,7 @@
         },
         "sources": {
           "type": "array",
-          "description": "Reviewer provenance added by the runner in final output.",
+          "description": "由本地运行器在最终输出中补充的审查来源信息。",
           "items": {
             "type": "object",
             "additionalProperties": false,

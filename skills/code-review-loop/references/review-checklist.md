@@ -1,11 +1,11 @@
-# Generic Review Checklist
+# 通用审查清单
 
-Use this checklist with `--checklist` when a task benefits from extra scrutiny.
+当任务需要更细的额外审视时，可通过 `--checklist` 使用这份清单。
 
-- Verify the change satisfies the request, accepted design, and non-goals.
-- Check that the diff does not include unrelated local work.
-- Check user-visible behavior, integration contracts, state transitions, persistence, and error handling.
-- Check security-sensitive areas such as authentication, authorization, secrets, injection, file access, network calls, and destructive operations.
-- Check dependency, lockfile, build, CI, and deployment changes for compatibility risk.
-- Check that verification commands are meaningful for the changed surface and that failures are treated as blocking.
-- Check that generated artifacts, review briefs, logs, and model outputs do not leak secrets.
+- 确认改动满足用户请求、已接受设计和非目标约束。
+- 确认 diff 中没有夹带与当前任务无关的本地改动。
+- 检查用户可见行为、集成契约、状态迁移、持久化和错误处理。
+- 检查认证、授权、密钥、注入、文件访问、网络调用和破坏性操作等安全敏感区域。
+- 检查依赖、锁文件、构建、CI 和部署变更是否带来兼容性风险。
+- 检查验证命令是否真正覆盖了被修改的表面，并确认失败会被视为阻塞。
+- 检查生成产物、审查 brief、日志和模型输出中是否可能泄露密钥。

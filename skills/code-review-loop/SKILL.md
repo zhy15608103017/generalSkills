@@ -1,106 +1,106 @@
 ---
 name: code-review-loop
-description: Use when feature, bug fix, refactor, or other code-bearing local changes need an external AI code review before completion. Do not trigger for docs-only, formatting, comment, typo, lockfile, generated-output, `.ai-review/` artifact, or plain dependency-version-only changes.
+description: 当功能、修复、重构或其他代码改动在完成前需要额外的本地 AI 代码审查时使用。纯文档、纯格式、纯注释、纯错字、锁文件、生成产物、`.ai-review/` 工件或仅依赖版本变更不触发。
 ---
 
 # Code Review Loop
 
-Use this skill to run a local AI review loop over the current Git changes. The reviewer model audits the work; the current coding agent owns fixes.
+使用这个技能，对当前 Git 改动运行一套本地 AI 审查闭环。审查模型负责产出结构化结论；当前编码 agent 负责修复、验证和重新审查。
 
-## Non-Negotiable Rules
+## 不可妥协的规则
 
-- Create or update `.ai-review/review-context/current-request.md` before every non-dry-run review.
-- Make the context self-contained. The reviewer cannot see the conversation, so inline the original request, later corrections, current understanding, explicit anti-examples, design decisions, non-goals, acceptance criteria, and verification commands.
-- Do not let the reviewer model edit files directly. It returns structured findings; the current coding agent fixes, verifies, and reruns review.
-- Treat only `P0` and `P1` findings as blocking unless the user says otherwise.
-- Do not run unbounded review/fix cycles unless the review-round limit is explicitly configured as `infinity`. The default maximum is three review rounds; configure it with `--max-review-rounds` or `AI_REVIEW_MAX_REVIEW_ROUNDS`.
-- Never mark work complete only because AI review passed. Also report local verification commands and results.
+- 每次非 `dry-run` 审查前，都必须创建或更新 `.ai-review/review-context/current-request.md`。
+- 上下文必须自包含。审查模型看不到对话历史，所以要内联原始请求、后续纠正、当前理解、明确反例、设计决策、非目标、验收标准和验证命令。
+- 不要让审查模型直接修改文件。它只返回结构化 findings，当前编码 agent 负责修复、验证并重跑审查。
+- 除非用户另有要求，否则只有 `P0` 和 `P1` 视为阻塞问题。
+- 除非显式把轮次上限配置为 `infinity`，否则不要无上限地循环“审查/修复”。默认最多三轮，可通过 `--max-review-rounds` 或 `AI_REVIEW_MAX_REVIEW_ROUNDS` 配置。
+- 不能只因为 AI 审查通过就宣布任务完成；还要同时汇报本地验证命令和验证结果。
 
-## Context File
+## 上下文文件
 
-Prefer the bundled context writer:
+优先使用内置的上下文写入脚本：
 
 ```bash
-node .agents/skills/code-review-loop/scripts/write-review-context.mjs --request "<user request>" --corrections "<later corrections>" --understanding "<current agent understanding>" --anti-examples "<rejected behavior>" --design "<accepted design>" --acceptance "<acceptance criteria>" --non-goals "<out of scope>" --verification "<verification commands>"
+node .agents/skills/code-review-loop/scripts/write-review-context.mjs --request "<用户请求>" --corrections "<后续纠正>" --understanding "<当前理解>" --anti-examples "<明确反例>" --design "<设计决策>" --acceptance "<验收标准>" --non-goals "<非目标>" --verification "<验证命令>"
 ```
 
-For full Markdown context, write from a UTF-8 file:
+如果你已经准备好了完整 Markdown，也可以从 UTF-8 文件写入：
 
 ```bash
 node .agents/skills/code-review-loop/scripts/write-review-context.mjs --from-file .ai-review/review-context/draft-request.md
 ```
 
-Structured field flags such as `--request` and `--acceptance` are limited to 4000 characters each. If a field is longer, the writer fails with `FIELD_TOO_LONG`, removes the target output file so stale context is not reused, and avoids writing an incomplete `current-request.md`; save the full Markdown as UTF-8 and rerun with `--from-file <path>`. Use `--allow-truncate` only when an explicitly incomplete context is acceptable.
+像 `--request`、`--acceptance` 这样的结构化字段，每项最多 4000 字符。超长时写入器会以 `FIELD_TOO_LONG` 失败、删除目标输出文件以避免复用旧上下文，并拒绝写入半截的 `current-request.md`；这时请把完整 Markdown 存成 UTF-8 文件，再用 `--from-file <path>` 重跑。只有在明确接受不完整上下文时，才使用 `--allow-truncate`。
 
-For a new feature, overwrite the current context instead of appending old requirements. Keep `current-design.md` and `current-plan.md` concise when needed; pass large extra docs with `--doc` only when the review needs them.
+如果是新的需求切片，应覆盖当前上下文，不要把旧需求继续追加进去。`current-design.md` 和 `current-plan.md` 需要时保持简洁；只有审查确实需要时，才用 `--doc` 传入较大的补充文档。
 
-## Requirement Understanding Gate
+## 需求理解闸门
 
-Every non-dry-run review runs a requirement-understanding audit before code review. The gate uses `references/requirement-auditor-prompt.md` and the same structured result schema.
+每次非 `dry-run` 审查，都会先执行一次“需求理解审计”，再决定是否进入代码审查。这个阶段使用 `references/requirement-auditor-prompt.md`，并复用相同的结构化结果 schema。
 
-The gate must pass before code is reviewed. If it returns `fail` or `needs_human`, the script writes `.ai-review/latest-result.json` and `.ai-review/latest-report.md`, skips code review, and exits with the same blocking semantics as a code review failure.
+只有需求理解闸门通过，才会继续审查代码。如果返回 `fail` 或 `needs_human`，脚本会写出 `.ai-review/latest-result.json` 和 `.ai-review/latest-report.md`，跳过代码审查，并按与代码审查失败相同的阻塞语义退出。
 
-Successful audits are cached; the gate skips re-auditing when context, prompt, and model have not changed. To force a fresh requirement audit, pass `--no-requirement-audit-cache`.
+成功的需求审计会被缓存；当上下文、提示词和模型都未变化时，会跳过重复审计。若要强制重新执行需求审计，可传入 `--no-requirement-audit-cache`。
 
-## Progress and Automatic Strategy
+## 进度与自动策略
 
-The standard `--profile auto` entrypoint chooses the review strategy automatically. Small and medium changes run a single code review. Large changes are split into parallel file shards and followed by one aggregate review that checks cross-shard integration, requirement coverage, and missed P0/P1 risks.
+标准入口 `--profile auto` 会自动选择审查策略。小型和中型改动执行一次代码审查；大型改动会先自动拆成并行文件分片，再追加一次汇总审查，用于检查跨分片集成风险、需求覆盖缺口以及遗漏的 `P0/P1` 风险。
 
-During each run the script writes progress to `.ai-review/latest-status.json` and `.ai-review/latest-status.md`, and prints heartbeat lines to stderr while waiting for model calls. These status artifacts are local and sensitive like other `.ai-review/` outputs.
+运行过程中，脚本会把进度写入 `.ai-review/latest-status.json` 和 `.ai-review/latest-status.md`，并在等待模型调用时持续向 stderr 打印 heartbeat。和其他 `.ai-review/` 产物一样，这些状态文件也应按本地敏感信息处理。
 
-## Default Flow
+## 默认流程
 
-1. Create or update `.ai-review/review-context/current-request.md` with the original request, user corrections, current agent understanding, anti-examples, design, non-goals, acceptance criteria, and suggested verification.
-2. Confirm there are local changes to review with `git status --short`.
-3. Run local verification commands that match the change (e.g. `git diff --check`, `npm test`).
-4. Optionally, run with `--dry-run` first to inspect the review brief without calling a model. Dry-run can run before the request-context file exists; non-dry-run review still requires `.ai-review/review-context/current-request.md`.
-5. Run the bundled review script from the repository root. It first runs the requirement-understanding gate, then runs code review only if the gate passes:
-
-```bash
-node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --verify "git diff --check"
-```
-
-6. While the run is active, inspect `.ai-review/latest-status.md` or terminal heartbeat output if you need progress.
-7. Read `.ai-review/latest-result.json` and `.ai-review/latest-report.md`; inspect requirement-audit artifacts when the gate blocks.
-8. Report all findings, but fix blocking `P0` and `P1` findings before completion.
-9. Fix blocking findings yourself, then rerun local verification.
-10. Repeat the review loop up to the configured maximum (`3` by default; `infinity` means no round cap).
-11. If blocking findings remain after the configured maximum, stop and return the remaining issues for human decision.
-
-## Commands
-
-The full command catalog — dry run, provider and OpenAI-compatible endpoints, CodeGraph impact context, staged review, second reviewer, checklists, profiles, and `.ai-reviewignore` — is in `references/workflow.md`. Provider, model, dual-reviewer, timeout, and environment-variable configuration is in `references/configuration.md` and `references/provider-config.md`.
-
-The standard invocation:
+1. 创建或更新 `.ai-review/review-context/current-request.md`，写入原始请求、用户纠正、当前理解、反例、设计、非目标、验收标准和建议验证命令。
+2. 用 `git status --short` 确认本地确实存在待审查改动。
+3. 先运行与改动匹配的本地验证命令，例如 `git diff --check`、`npm test`。
+4. 如有需要，可先跑一次 `--dry-run`，只检查审查简报内容而不调用模型。`dry-run` 可以在请求上下文文件尚未存在时运行；但正式非 `dry-run` 审查仍然要求 `.ai-review/review-context/current-request.md` 已准备好。
+5. 在仓库根目录运行内置审查脚本。它会先跑需求理解闸门，通过后再进入代码审查：
 
 ```bash
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --verify "git diff --check"
 ```
 
-## Reviewer Verdict
+6. 运行期间，如需查看进度，可检查 `.ai-review/latest-status.md` 或终端 heartbeat 输出。
+7. 读取 `.ai-review/latest-result.json` 和 `.ai-review/latest-report.md`；如果是需求闸门拦截，也要查看需求审计相关产物。
+8. 汇报全部 findings，但在结束前必须修复所有阻塞性的 `P0/P1` 问题。
+9. 阻塞问题需要由当前编码 agent 自己修复，然后重新跑本地验证。
+10. 按配置上限重复“审查/修复”闭环，默认最多 `3` 轮；`infinity` 表示不设上限。
+11. 如果达到最大轮次后仍有阻塞问题，停止自动循环，并把剩余问题交还给人工决策。
 
-- `pass`: No blocking findings. Warnings may still be reported.
-- `fail`: One or more `P0` or `P1` findings must be fixed before completion.
-- `needs_human`: The reviewer cannot decide safely because context is missing, requirements conflict, or the patch is too risky for automatic repair.
+## 命令
 
-If reviewer output is malformed, retry with the same configurable retry parameters. If retries are exhausted, stop and report the tool failure.
+完整命令目录，例如 dry run、provider 与 OpenAI-compatible 端点、CodeGraph 影响上下文、暂存区审查、第二审查员、检查清单、profiles 和 `.ai-reviewignore`，请查看 `references/workflow.md`。provider、模型、双审配置、超时和环境变量配置，请查看 `references/configuration.md` 与 `references/provider-config.md`。
 
-## Review Limits and Retries
+标准调用命令：
 
-- Review/fix loop limit: `--max-review-rounds <count|infinity>` or `AI_REVIEW_MAX_REVIEW_ROUNDS`; default `3`.
-- Retryable model failures retry only when an attempt fails quickly. Defaults: `AI_REVIEW_RETRIES=3`, `AI_REVIEW_RETRY_FAST_FAILURE_MS=10000`, and `AI_REVIEW_RETRY_DELAY_MS=5000`.
-- Override the same retry budget for the second reviewer with `--second-retries`, `--second-retry-fast-failure-ms`, `--second-retry-delay-ms`, or `AI_REVIEW_SECOND_*` equivalents. When unset, second review inherits the primary budget.
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --verify "git diff --check"
+```
 
-## References
+## 审查结论
 
-- Workflow guide and full command catalog: `references/workflow.md`
-- Configuration guide: `references/configuration.md`
-- Provider setup: `references/provider-config.md`
-- Requirement auditor prompt: `references/requirement-auditor-prompt.md`
-- Reviewer prompt: `references/reviewer-prompt.md`
-- Output schema: `references/review-result.schema.json`
-- Model list: `references/model-providers.json`
+- `pass`：没有阻塞问题，可能仍会带有 warnings。
+- `fail`：存在一个或多个 `P0` 或 `P1`，必须修复后才能完成交付。
+- `needs_human`：审查模型无法安全判断，例如上下文缺失、需求冲突，或补丁风险过高。
 
-## Security
+如果模型输出结构不合法，应按当前可配置的重试参数重试；若重试耗尽，停止流程并汇报工具失败。
 
-Treat `.ai-review/` artifacts as potentially sensitive — they may contain local code context and review details. Never upload them to public locations.
+## 轮次与重试限制
+
+- 审查/修复闭环轮次上限：`--max-review-rounds <count|infinity>` 或 `AI_REVIEW_MAX_REVIEW_ROUNDS`，默认 `3`。
+- 可重试的模型失败只在“快速失败”时触发重试。默认值为：`AI_REVIEW_RETRIES=3`、`AI_REVIEW_RETRY_FAST_FAILURE_MS=10000`、`AI_REVIEW_RETRY_DELAY_MS=5000`。
+- 第二审查员可用 `--second-retries`、`--second-retry-fast-failure-ms`、`--second-retry-delay-ms` 或对应的 `AI_REVIEW_SECOND_*` 环境变量覆盖重试预算；未显式设置时，默认继承主审预算。
+
+## 参考资料
+
+- 工作流与完整命令目录：`references/workflow.md`
+- 配置说明：`references/configuration.md`
+- Provider 配置：`references/provider-config.md`
+- 需求理解审计提示词：`references/requirement-auditor-prompt.md`
+- 审查员提示词：`references/reviewer-prompt.md`
+- 输出 schema：`references/review-result.schema.json`
+- 模型列表：`references/model-providers.json`
+
+## 安全
+
+请把 `.ai-review/` 下的产物视为潜在敏感信息处理，它们可能包含本地代码上下文和审查细节。不要把这些文件上传到公开位置。
