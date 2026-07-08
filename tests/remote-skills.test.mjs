@@ -222,3 +222,170 @@ test("adds remote skills to the default target only", async () => {
     );
   });
 });
+
+test("falls back to GitHub blob API when raw downloads are rate limited", async () => {
+  await withTempDir(async (destDir) => {
+    const blobUrls = {
+      skill: "https://api.github.com/repos/owner/repo/git/blobs/skill-md",
+      install: "https://api.github.com/repos/owner/repo/git/blobs/install-mjs"
+    };
+    const tree = {
+      tree: [
+        { path: "skills/alpha-skill/SKILL.md", type: "blob", url: blobUrls.skill },
+        { path: "skills/alpha-skill/.gskills/install.mjs", type: "blob", url: blobUrls.install }
+      ]
+    };
+    const blobs = new Map([
+      [
+        blobUrls.skill,
+        "---\nname: alpha-skill\ndescription: Use when installing alpha.\n---\n\n# Alpha\n"
+      ],
+      [blobUrls.install, "export async function install() {}\n"]
+    ]);
+    const rawRequests = [];
+    const blobRequests = [];
+    const fetchImpl = async (url) => {
+      const href = String(url);
+      if (href.includes("/git/trees/")) {
+        return jsonResponse(tree);
+      }
+      if (href.startsWith("https://raw.githubusercontent.com/")) {
+        rawRequests.push(href);
+        return {
+          ok: false,
+          status: 429,
+          statusText: "Too Many Requests",
+          text: async () => "too many requests"
+        };
+      }
+      if (blobs.has(href)) {
+        blobRequests.push(href);
+        return jsonResponse({
+          encoding: "base64",
+          content: Buffer.from(blobs.get(href), "utf8").toString("base64")
+        });
+      }
+      return {
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        text: async () => "not found"
+      };
+    };
+
+    const result = await addRemoteSkills({
+      source: "owner/repo",
+      ref: "main",
+      destDir,
+      tool: "default",
+      skills: ["alpha-skill"],
+      fetchImpl
+    });
+
+    assert.deepEqual(result.installed.map((entry) => entry.tool), ["default"]);
+    assert.deepEqual(result.installScripts.map((entry) => entry.skillName), ["alpha-skill"]);
+    const skill = await readFile(path.join(destDir, ".agents/skills/alpha-skill/SKILL.md"), "utf8");
+    assert.match(skill, /name: alpha-skill/);
+    assert.equal(rawRequests.length, 2);
+    assert.deepEqual(blobRequests.sort(), Object.values(blobUrls).sort());
+  });
+});
+
+test("rejects malformed GitHub blob content during raw fallback", async () => {
+  await withTempDir(async (destDir) => {
+    const tree = {
+      tree: [
+        {
+          path: "skills/alpha-skill/SKILL.md",
+          type: "blob",
+          url: "https://api.github.com/repos/owner/repo/git/blobs/skill-md"
+        }
+      ]
+    };
+    const fetchImpl = async (url) => {
+      const href = String(url);
+      if (href.includes("/git/trees/")) {
+        return jsonResponse(tree);
+      }
+      if (href.startsWith("https://raw.githubusercontent.com/")) {
+        return {
+          ok: false,
+          status: 429,
+          statusText: "Too Many Requests",
+          text: async () => "too many requests"
+        };
+      }
+      if (href.includes("/git/blobs/")) {
+        return jsonResponse({
+          encoding: "base64",
+          content: "not base64??"
+        });
+      }
+      return {
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        text: async () => "not found"
+      };
+    };
+
+    await assert.rejects(
+      () =>
+        addRemoteSkills({
+          source: "owner/repo",
+          ref: "main",
+          destDir,
+          tool: "default",
+          skills: ["alpha-skill"],
+          fetchImpl
+        }),
+      /did not include valid base64 content/
+    );
+  });
+});
+
+test("falls back to GitHub blob API when raw request fails before a response", async () => {
+  await withTempDir(async (destDir) => {
+    const blobUrl = "https://api.github.com/repos/owner/repo/git/blobs/skill-md";
+    const tree = {
+      tree: [{ path: "skills/alpha-skill/SKILL.md", type: "blob", url: blobUrl }]
+    };
+    const fetchImpl = async (url) => {
+      const href = String(url);
+      if (href.includes("/git/trees/")) {
+        return jsonResponse(tree);
+      }
+      if (href.startsWith("https://raw.githubusercontent.com/")) {
+        throw new TypeError("fetch failed");
+      }
+      if (href === blobUrl) {
+        return jsonResponse({
+          encoding: "base64",
+          content: Buffer.from(
+            "---\nname: alpha-skill\ndescription: Use when installing alpha.\n---\n\n# Alpha\n",
+            "utf8"
+          ).toString("base64")
+        });
+      }
+      return {
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        text: async () => "not found"
+      };
+    };
+
+    const result = await addRemoteSkills({
+      source: "owner/repo",
+      ref: "main",
+      destDir,
+      tool: "default",
+      skills: ["alpha-skill"],
+      fetchImpl
+    });
+
+    assert.deepEqual(result.installed.map((entry) => entry.tool), ["default"]);
+    const skill = await readFile(path.join(destDir, ".agents/skills/alpha-skill/SKILL.md"), "utf8");
+    assert.match(skill, /name: alpha-skill/);
+  });
+});

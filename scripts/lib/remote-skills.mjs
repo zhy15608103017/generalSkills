@@ -67,9 +67,11 @@ export async function listRemoteSkills({
   const skills = [];
 
   for (const skillName of skillNames) {
+    const remotePath = `skills/${skillName}/SKILL.md`;
     const text = await fetchRawText({
       ...config,
-      remotePath: `skills/${skillName}/SKILL.md`,
+      remotePath,
+      treeEntry: findTreeBlob(tree, remotePath),
       fetchImpl
     });
     const frontmatter = parseSkillFrontmatter(text);
@@ -188,17 +190,17 @@ async function downloadRemoteSkill({
   const prefix = `skills/${skillName}/`;
   const files = tree
     .filter((entry) => entry.type === "blob")
-    .map((entry) => entry.path)
-    .filter((remotePath) => remotePath.startsWith(prefix));
+    .filter((entry) => entry.path.startsWith(prefix));
 
-  for (const remotePath of files) {
+  for (const file of files) {
     const bytes = await fetchRawBytes({
       source,
       ref,
-      remotePath,
+      remotePath: file.path,
+      treeEntry: file,
       fetchImpl
     });
-    const outputPath = path.join(repoDir, ...remotePath.split("/"));
+    const outputPath = path.join(repoDir, ...file.path.split("/"));
     await mkdir(path.dirname(outputPath), { recursive: true });
     await writeFile(outputPath, bytes);
   }
@@ -209,18 +211,64 @@ async function fetchRawText(options) {
   return bytes.toString("utf8");
 }
 
-async function fetchRawBytes({ source, ref, remotePath, fetchImpl }) {
+async function fetchRawBytes({ source, ref, remotePath, treeEntry, fetchImpl }) {
   ensureFetch(fetchImpl);
   const { owner, repo } = parseGitHubSource(source);
   const url = rawGitHubUrl({ owner, repo, ref, remotePath });
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      headers: {
+        "User-Agent": "gskills"
+      }
+    });
+  } catch (error) {
+    if (treeEntry) {
+      const bytes = await fetchBlobBytes({ source, remotePath, treeEntry, fetchImpl });
+      if (bytes) return bytes;
+    }
+    throw error;
+  }
+  if (response.ok) {
+    return responseBytes(response);
+  }
+  if (shouldTryBlobFallback(response.status) && treeEntry) {
+    const bytes = await fetchBlobBytes({ source, remotePath, treeEntry, fetchImpl });
+    if (bytes) return bytes;
+  }
+  throw new Error(`Failed to fetch ${remotePath}: HTTP ${response.status} ${response.statusText}`);
+}
+
+async function fetchBlobBytes({ source, remotePath, treeEntry, fetchImpl }) {
+  const url = blobApiUrl({ source, treeEntry });
+  if (!url) return null;
   const response = await fetchImpl(url, {
     headers: {
+      "Accept": "application/vnd.github+json",
       "User-Agent": "gskills"
     }
   });
   if (!response.ok) {
-    throw new Error(`Failed to fetch ${remotePath}: HTTP ${response.status} ${response.statusText}`);
+    throw new Error(
+      `Failed to fetch ${remotePath} via GitHub blob API: HTTP ${response.status} ${response.statusText}`
+    );
   }
+  const data = await response.json();
+  if (data.encoding !== "base64" || typeof data.content !== "string") {
+    throw new Error(`GitHub blob response for ${remotePath} did not include base64 content.`);
+  }
+  return decodeBase64Content(remotePath, data.content);
+}
+
+function decodeBase64Content(remotePath, content) {
+  const normalized = content.replace(/\s/g, "");
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(normalized)) {
+    throw new Error(`GitHub blob response for ${remotePath} did not include valid base64 content.`);
+  }
+  return Buffer.from(normalized, "base64");
+}
+
+async function responseBytes(response) {
   if (typeof response.arrayBuffer === "function") {
     return Buffer.from(await response.arrayBuffer());
   }
@@ -230,6 +278,21 @@ async function fetchRawBytes({ source, ref, remotePath, fetchImpl }) {
 function rawGitHubUrl({ owner, repo, ref, remotePath }) {
   const encodedPath = remotePath.split("/").map(encodeURIComponent).join("/");
   return `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(ref)}/${encodedPath}`;
+}
+
+function blobApiUrl({ source, treeEntry }) {
+  if (treeEntry.url) return treeEntry.url;
+  if (!treeEntry.sha) return null;
+  const { owner, repo } = parseGitHubSource(source);
+  return `https://api.github.com/repos/${owner}/${repo}/git/blobs/${encodeURIComponent(treeEntry.sha)}`;
+}
+
+function findTreeBlob(tree, remotePath) {
+  return tree.find((entry) => entry.type === "blob" && entry.path === remotePath);
+}
+
+function shouldTryBlobFallback(status) {
+  return status === 403 || status === 429;
 }
 
 function normalizeRequestedSkills(skills) {
