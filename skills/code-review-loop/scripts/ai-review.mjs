@@ -57,6 +57,7 @@ async function main() {
     phase: "start",
     message: "初始化 AI 审核运行。",
   });
+  await clearShardBriefArtifacts(outDir);
 
   if (!options.dryRun) {
     await assertRequestContext(root, options);
@@ -165,6 +166,7 @@ async function main() {
     brief,
     assets,
     options,
+    outDir,
     primaryResolved,
     secondResolved,
     secondReviewSetup,
@@ -269,6 +271,7 @@ export async function runAutoReviewPasses({
   brief,
   assets,
   options,
+  outDir = null,
   primaryResolved,
   secondResolved,
   secondReviewSetup = null,
@@ -284,6 +287,7 @@ export async function runAutoReviewPasses({
   });
 
   if (strategy.mode !== "sharded") {
+    if (outDir) await clearShardBriefArtifacts(outDir);
     return await runReviewPasses({
       brief,
       assets,
@@ -300,6 +304,7 @@ export async function runAutoReviewPasses({
     context,
     assets,
     options,
+    outDir,
     primaryResolved,
     secondResolved,
     secondReviewSetup,
@@ -464,6 +469,7 @@ async function runShardedReviewPasses({
   context,
   assets,
   options,
+  outDir = null,
   primaryResolved,
   secondResolved,
   secondReviewSetup = null,
@@ -472,16 +478,25 @@ async function runShardedReviewPasses({
   strategy,
 }) {
   const shards = buildReviewShards(context.changedFiles, strategy.maxShards, context.diff);
+  const shardRuns = shards.map((shard, index) => ({
+    shard,
+    index,
+    brief: renderShardBrief(context, shard, index, shards.length),
+  }));
+  const shardBriefArtifacts = outDir
+    ? await writeShardBriefArtifacts(outDir, shardRuns)
+    : null;
   await statusReporter?.update({
     phase: "sharded_review",
     message: `自动拆成 ${shards.length} 个分片并行审核。`,
     shardCount: shards.length,
+    shardBriefsDir: shardBriefArtifacts?.dir,
+    shardBriefFiles: shardBriefArtifacts?.files,
     strategyReasons: strategy.reasons,
   });
 
   const shardOptions = { ...options, secondReviewMode: "off" };
-  const shardOutcomes = await Promise.all(shards.map(async (shard, index) => {
-    const shardBrief = renderShardBrief(context, shard, index, shards.length);
+  const shardOutcomes = await Promise.all(shardRuns.map(async ({ shard, index, brief: shardBrief }) => {
     return await settleReview(runSingleReview({
       brief: shardBrief,
       assets,
@@ -499,7 +514,12 @@ async function runShardedReviewPasses({
 
   const mergedShardRun = mergeShardOutcomes(shardOutcomes, shards, primaryResolved);
   if (!mergedShardRun.result || mergedShardRun.result.verdict === "needs_human") {
-    return mergedShardRun;
+    return {
+      ...mergedShardRun,
+      result: mergedShardRun.result
+        ? withReviewNotes(mergedShardRun.result, [shardBriefArtifactNote(shardBriefArtifacts)])
+        : mergedShardRun.result,
+    };
   }
 
   const aggregationBrief = renderAggregationBrief({
@@ -530,6 +550,7 @@ async function runShardedReviewPasses({
       mergeReviewResults(mergedShardRun.result, aggregationRun.result),
       [
         `自动分片审核: ${shards.length} 个分片并行完成，随后运行汇总审核。`,
+        shardBriefArtifactNote(shardBriefArtifacts),
         ...strategy.reasons.map((reason) => `自动分片原因: ${reason}`),
       ],
     ),
@@ -538,6 +559,52 @@ async function runShardedReviewPasses({
       second: null,
     },
   };
+}
+
+async function writeShardBriefArtifacts(outDir, shardRuns) {
+  const shardDir = path.join(outDir, "shards");
+  await fs.rm(shardDir, { recursive: true, force: true });
+  await fs.mkdir(shardDir, { recursive: true });
+
+  const entries = shardRuns.map(({ shard, index, brief }) => ({
+    fileName: `shard-${index + 1}.md`,
+    files: shard.files,
+    brief,
+  }));
+
+  await Promise.all(entries.map((entry) =>
+    fs.writeFile(path.join(shardDir, entry.fileName), entry.brief, "utf8"),
+  ));
+
+  const indexContent = [
+    "# 自动分片审核上下文",
+    "",
+    "这些文件是最近一次自动分片审核实际发送给分片审查模型的 brief。",
+    "",
+    "## 分片",
+    "",
+    ...entries.map((entry, index) => [
+      `### 分片 ${index + 1}`,
+      "",
+      `- brief: ${entry.fileName}`,
+      `- files: ${entry.files.join(", ")}`,
+      "",
+    ].join("\n")),
+  ].join("\n");
+  await fs.writeFile(path.join(shardDir, "index.md"), indexContent, "utf8");
+
+  return {
+    dir: shardDir,
+    files: entries.map((entry) => path.join(shardDir, entry.fileName)),
+  };
+}
+
+async function clearShardBriefArtifacts(outDir) {
+  await fs.rm(path.join(outDir, "shards"), { recursive: true, force: true });
+}
+
+function shardBriefArtifactNote(artifacts) {
+  return artifacts?.dir ? `自动分片审核上下文已写入: ${artifacts.dir}` : null;
 }
 
 export function resolveAutoReviewStrategy({ context = {}, brief = "", options = {} }) {

@@ -62,9 +62,11 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --veri
 ```text
 .ai-review/latest-status.json
 .ai-review/latest-status.md
+.ai-review/shards/index.md
+.ai-review/shards/shard-<n>.md
 ```
 
-终端也会输出 heartbeat，显示当前阶段、已等待时间、模型、分片数和策略原因。等待大模型返回时，优先查看 `latest-status.md` 判断是否仍在推进。
+其中 `.ai-review/shards/` 只会在自动策略选择分片审查时生成，保存每个分片实际发送给审查模型的完整 brief。终端也会输出 heartbeat，显示当前阶段、已等待时间、模型、分片数和策略原因。等待大模型返回时，优先查看 `latest-status.md` 判断是否仍在推进。
 
 ## 标准流程
 
@@ -156,6 +158,7 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --staged --verify "gi
 .ai-review/latest-report.md
 .ai-review/latest-result.json
 .ai-review/latest-status.md
+.ai-review/shards/index.md
 ```
 
 6. 根据 verdict 处理。

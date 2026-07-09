@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -189,28 +192,62 @@ test("mergeReviewResults keeps matching findings from different files distinct",
 });
 
 test("runAutoReviewPasses runs sharded reviews and then an aggregate review", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-shards-"));
   const files = Array.from({ length: 12 }, (_, index) => `src/file-${index}.js`);
   const context = reviewContext(files);
   const seenBriefs = [];
-
-  const run = await runAutoReviewPasses({
-    context,
-    brief: "large brief",
-    assets: { systemPrompt: "prompt", schema: {}, providersConfig },
-    options: parseArgs(["--profile", "auto", "--max-shards", "3"]),
-    primaryResolved: { provider: "primary", model: "primary-model" },
-    callReviewModelFn: async ({ brief }) => {
-      seenBriefs.push(brief);
-      return passResult({
-        summary: brief.includes("自动分片审核汇总上下文") ? "aggregate ok" : "shard ok",
-      });
+  const statusUpdates = [];
+  const statusReporter = {
+    update: async (partial) => {
+      statusUpdates.push(partial);
     },
-  });
+    run: async (partial, callback) => {
+      statusUpdates.push(partial);
+      return await callback();
+    },
+  };
 
-  assert.equal(seenBriefs.length, 4);
-  assert.equal(seenBriefs.filter((brief) => brief.includes("自动分片审核汇总上下文")).length, 1);
-  assert.equal(run.result.verdict, "pass");
-  assert.ok(run.result.verification_notes.some((note) => note.includes("自动分片审核")));
+  try {
+    const run = await runAutoReviewPasses({
+      context,
+      brief: "large brief",
+      assets: { systemPrompt: "prompt", schema: {}, providersConfig },
+      options: parseArgs(["--profile", "auto", "--max-shards", "3"]),
+      outDir: tempDir,
+      primaryResolved: { provider: "primary", model: "primary-model" },
+      statusReporter,
+      callReviewModelFn: async ({ brief }) => {
+        seenBriefs.push(brief);
+        return passResult({
+          summary: brief.includes("自动分片审核汇总上下文") ? "aggregate ok" : "shard ok",
+        });
+      },
+    });
+
+    const shardDir = path.join(tempDir, "shards");
+    const artifactNames = await readdir(shardDir);
+    const shardOne = await readFile(path.join(shardDir, "shard-1.md"), "utf8");
+    const index = await readFile(path.join(shardDir, "index.md"), "utf8");
+    const shardedStatus = statusUpdates.find((update) =>
+      update.phase === "sharded_review" && update.shardBriefsDir);
+
+    assert.deepEqual(artifactNames.sort(), ["index.md", "shard-1.md", "shard-2.md", "shard-3.md"]);
+    assert.ok(seenBriefs.includes(shardOne));
+    assert.match(index, /shard-1\.md/);
+    assert.match(index, /src\/file-/);
+    assert.equal(shardedStatus?.shardBriefsDir, shardDir);
+    assert.deepEqual(
+      shardedStatus?.shardBriefFiles.map((file) => path.basename(file)),
+      ["shard-1.md", "shard-2.md", "shard-3.md"],
+    );
+    assert.match(run.result.verification_notes.join("\n"), /shards/);
+    assert.equal(seenBriefs.length, 4);
+    assert.equal(seenBriefs.filter((brief) => brief.includes("自动分片审核汇总上下文")).length, 1);
+    assert.equal(run.result.verdict, "pass");
+    assert.ok(run.result.verification_notes.some((note) => note.includes("自动分片审核")));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("runAutoReviewPasses does not aggregate to pass when a shard fails", async () => {

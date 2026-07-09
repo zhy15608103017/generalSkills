@@ -46,7 +46,7 @@ node .agents/skills/code-review-loop/scripts/write-review-context.mjs --from-fil
 
 标准入口 `--profile auto` 会自动选择审查策略。小型和中型改动执行一次代码审查；大型改动会先自动拆成并行文件分片，再追加一次汇总审查，用于检查跨分片集成风险、需求覆盖缺口以及遗漏的 `P0/P1` 风险。
 
-运行过程中，脚本会把进度写入 `.ai-review/latest-status.json` 和 `.ai-review/latest-status.md`，并在等待模型调用时持续向 stderr 打印 heartbeat。和其他 `.ai-review/` 产物一样，这些状态文件也应按本地敏感信息处理。
+运行过程中，脚本会把进度写入 `.ai-review/latest-status.json` 和 `.ai-review/latest-status.md`，并在等待模型调用时持续向 stderr 打印 heartbeat。自动策略选择分片审查时，每个分片实际发送给审查模型的 brief 会写入 `.ai-review/shards/index.md` 和 `.ai-review/shards/shard-<n>.md`。和其他 `.ai-review/` 产物一样，这些状态和分片文件也应按本地敏感信息处理。
 
 ## 默认流程
 
