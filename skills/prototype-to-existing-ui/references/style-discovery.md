@@ -76,6 +76,8 @@ CSS 体系:
 
 除非用户要求，不要把完整摘要放进最终回复。它主要用于指导实现决策。
 
+需要可复现、可跨会话复用的摘要时，改用本技能的 `scripts/discover-style.mjs`，它会扫描 `.ui-reference/`、token 文件、CSS 变量、`package.json` 和组件目录，并把快照写入 `.ai-ui/style-snapshot.md`。
+
 ## 冲突处理
 
 当不同来源冲突时：

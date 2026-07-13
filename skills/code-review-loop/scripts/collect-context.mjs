@@ -1,4 +1,4 @@
-import { execFile, exec, spawn } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
@@ -13,8 +13,13 @@ import {
 } from "./review-limits.mjs";
 import { applyReviewProfile, maxProfileFileBytes, resolveReviewProfile } from "./review-profile.mjs";
 import { formatReviewTime } from "./time-format.mjs";
+import {
+  getGitRoot,
+  isReviewArtifactPath,
+  resolveReviewScope,
+  runGit,
+} from "./git-context.mjs";
 
-const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
 const FILE_CONTEXT_CACHE_VERSION = "v2-redact-2026-06-15";
 const DEFAULT_MAX_FILE_BYTES = 120000;
@@ -45,8 +50,14 @@ export function parseArgs(argv) {
 
     if (arg === "--dry-run") {
       args.dryRun = true;
+    } else if (arg === "--strict-output") {
+      args.strictOutput = true;
+    } else if (arg === "--relaxed-output") {
+      args.strictOutput = false;
     } else if (arg === "--no-requirement-audit-cache") {
       args.noRequirementAuditCache = true;
+    } else if (arg === "--reset-review-rounds") {
+      args.resetReviewRounds = true;
     } else if (arg === "--request" && next) {
       args.request = next;
       index += 1;
@@ -250,7 +261,7 @@ function splitPathList(value = "") {
 
 export async function collectReviewContext(options = {}) {
   const root = await getGitRoot();
-  const scope = resolveReviewScope(root, options);
+  const scope = await resolveReviewScope(root, options);
   const reviewIgnore = await loadReviewIgnore(root);
   const readSnippet = createSnippetReader();
   const [trackedChangedFilesRaw, untrackedFilesRaw, verification] = await Promise.all([
@@ -313,68 +324,6 @@ export async function collectReviewContext(options = {}) {
   };
 }
 
-async function getGitRoot() {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"]);
-  return stdout.trim();
-}
-
-function resolveReviewScope(root, options = {}) {
-  const base = options.base || "HEAD";
-  const paths = normalizeReviewPaths(root, options.paths || []);
-  const shouldExcludeReviewArtifacts = !paths.some(isReviewArtifactPath);
-  const pathspecPaths = paths.length ? paths : ["."];
-  const pathspec = [
-    "--",
-    ...pathspecPaths,
-    ...(shouldExcludeReviewArtifacts ? [":(exclude).ai-review/**"] : []),
-  ];
-  const diffCommand = options.staged
-    ? ["diff", "--cached", "--no-ext-diff", "--unified=80"]
-    : ["diff", "--no-ext-diff", "--unified=80", base];
-
-  return {
-    base,
-    staged: Boolean(options.staged),
-    paths,
-    pathspec,
-    diffCommand,
-  };
-}
-
-function normalizeReviewPaths(root, paths) {
-  return paths
-    .map((rawPath) => {
-      const trimmed = String(rawPath || "").trim();
-      if (!trimmed) return "";
-      if (trimmed.startsWith(":(")) {
-        throw new Error(`审核路径不支持 git pathspec 语法: ${trimmed}`);
-      }
-      const resolved = path.resolve(root, trimmed);
-      if (!isPathInsideOrSame(root, resolved)) {
-        throw new Error(`审核路径必须位于仓库内: ${trimmed}`);
-      }
-      return path.relative(root, resolved).replace(/\\/g, "/") || ".";
-    })
-    .filter((item, index, items) => item && items.indexOf(item) === index);
-}
-
-function isReviewArtifactPath(filePath) {
-  const normalized = String(filePath || "").replace(/\\/g, "/").replace(/\/+$/, "");
-  return normalized === ".ai-review" || normalized.startsWith(".ai-review/");
-}
-
-async function git(args, cwd) {
-  try {
-    const { stdout, stderr } = await execFileAsync("git", args, {
-      cwd,
-      maxBuffer: 1024 * 1024 * 20,
-    });
-    return [stdout, stderr].filter(Boolean).join("\n").trim();
-  } catch (error) {
-    return String(error.stderr || error.message || error);
-  }
-}
-
 function limitGitDiff(diff, maxBytes = 350000) {
   return limitText(redactSecrets(diff), maxBytes, "\n\n[Diff 已被 code-review-loop 截断。如需更完整内容，请调大 --max-diff-bytes。]");
 }
@@ -383,7 +332,7 @@ async function trackedChangedFileNames(root, scope) {
   const trackedCommand = scope.staged
     ? ["diff", "--name-only", "--cached", ...scope.pathspec]
     : ["diff", "--name-only", scope.base, ...scope.pathspec];
-  const trackedOutput = await git(trackedCommand, root);
+  const trackedOutput = await runGit(trackedCommand, root);
 
   return trackedOutput
     .split(/\r?\n/)
@@ -394,7 +343,7 @@ async function trackedChangedFileNames(root, scope) {
 
 async function untrackedFileNames(root, scope) {
   if (scope.staged) return [];
-  const output = await git(["ls-files", "--others", "--exclude-standard", ...scope.pathspec], root);
+  const output = await runGit(["ls-files", "--others", "--exclude-standard", ...scope.pathspec], root);
   return output
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -430,7 +379,7 @@ function toPathspec(files = []) {
 
 async function scopedGitStatus(root, pathspec) {
   if (!pathspec.length) return "";
-  return git(["status", "--short", ...pathspec], root);
+  return runGit(["status", "--short", ...pathspec], root);
 }
 
 async function scopedGitDiffStat(root, scope, pathspec) {
@@ -438,13 +387,13 @@ async function scopedGitDiffStat(root, scope, pathspec) {
   const statCommand = scope.staged
     ? ["diff", "--cached", "--no-ext-diff", "--stat"]
     : ["diff", "--no-ext-diff", "--stat", scope.base];
-  return git([...statCommand, ...pathspec], root);
+  return runGit([...statCommand, ...pathspec], root);
 }
 
 async function rawGitDiff(root, scope, files) {
   const pathspec = toPathspec(files);
   if (!pathspec.length) return "";
-  return git([...scope.diffCommand, ...pathspec], root);
+  return runGit([...scope.diffCommand, ...pathspec], root);
 }
 
 async function totalFileSizeBytes(root, files) {

@@ -120,6 +120,19 @@ test("parseArgs accepts local CLI preset options", () => {
   assert.equal(args.secondLocalCliArgs, "--model opus");
 });
 
+test("parseArgs supports strict and explicitly relaxed reviewer output", () => {
+  assert.equal(parseArgs(["--strict-output"]).strictOutput, true);
+  assert.equal(parseArgs(["--relaxed-output"]).strictOutput, false);
+});
+
+test("resolveProviderOptions validates reviewer output strictly by default", () => {
+  const defaultOptions = resolveProviderOptions({ provider: "primary" }, providersConfig);
+  const relaxedOptions = resolveProviderOptions({ provider: "primary", strictOutput: false }, providersConfig);
+
+  assert.equal(defaultOptions.strictOutput, true);
+  assert.equal(relaxedOptions.strictOutput, false);
+});
+
 test("parseArgs accepts configurable review rounds and retry timing options", () => {
   const args = parseArgs([
     "--max-review-rounds",
@@ -149,6 +162,10 @@ test("resolveMaxReviewRounds defaults to three and accepts infinity", () => {
   assert.equal(resolveMaxReviewRounds({ maxReviewRounds: Infinity }), Infinity);
   assert.equal(resolveMaxReviewRounds({}, { AI_REVIEW_MAX_REVIEW_ROUNDS: "5" }), 5);
   assert.equal(resolveMaxReviewRounds({ maxReviewRounds: "invalid" }, { AI_REVIEW_MAX_REVIEW_ROUNDS: "inf" }), Infinity);
+});
+
+test("parseArgs accepts resetting persisted review rounds", () => {
+  assert.equal(parseArgs(["--reset-review-rounds"]).resetReviewRounds, true);
 });
 
 test("renderReviewLimitValue normalizes invalid and infinite values", () => {

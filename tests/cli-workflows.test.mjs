@@ -374,6 +374,35 @@ test("code-review-loop install hook appends .ai-review to existing gitignore", a
   });
 });
 
+test("code-review-loop install hook rewrites commands for each installed target", async () => {
+  await withTempDir(async (destDir) => {
+    await installSkills({
+      repoDir: path.resolve("."),
+      destDir,
+      tool: "all",
+      skills: ["code-review-loop"]
+    });
+
+    for (const relativePath of [
+      ".agents/skills",
+      ".claude/skills",
+      ".cursor/skills",
+      ".gemini/skills",
+      ".opencode/skills",
+      ".trae/skills",
+      ".windsurf/skills"
+    ]) {
+      const skillPath = path.join(destDir, relativePath, "code-review-loop", "SKILL.md");
+      const skillText = await readFile(skillPath, "utf8");
+      const expectedPath = `${relativePath}/code-review-loop`.replace(/\\/g, "/");
+      assert.match(skillText, new RegExp(expectedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      if (relativePath !== ".agents/skills") {
+        assert.doesNotMatch(skillText, /\.agents\/skills\/code-review-loop/);
+      }
+    }
+  });
+});
+
 test("code-review-loop install hook creates gitignore when missing", async () => {
   await withTempDir(async (destDir) => {
     await installSkills({
@@ -416,8 +445,9 @@ test("code-review-loop install hook creates env template with placeholder keys",
 
     const envText = await readFile(path.join(destDir, ".env"), "utf8");
     assert.match(envText, /AI_REVIEW_PRIMARY_PROVIDER=openai-compatible/);
-    assert.match(envText, /AI_REVIEW_PRIMARY_BASE_URL=<primary-base-url> #地址/);
+    assert.match(envText, /AI_REVIEW_PRIMARY_BASE_URL=<primary-base-url>/);
     assert.match(envText, /AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
+    assert.match(envText, /AI_REVIEW_STRICT_OUTPUT=true/);
     assert.match(envText, /AI_REVIEW_SECOND_BASE_URL=<second-base-url>/);
     assert.match(envText, /AI_REVIEW_SECOND_API_KEY=<second-api-key>/);
     assert.doesNotMatch(envText, /10\.28\.7\.30|dreamfield\.top|sk-[A-Za-z0-9_-]+/);
@@ -450,7 +480,7 @@ test("code-review-loop install hook appends env template to existing env", async
     });
 
     const envText = await readFile(path.join(destDir, ".env"), "utf8");
-    assert.match(envText, /^EXISTING_FLAG=true\n\n# gskills:code-review-loop env:start\n\n+#主审模型配置/m);
+    assert.match(envText, /^EXISTING_FLAG=true\n\n# gskills:code-review-loop env:start\n# 主审模型配置/m);
     assert.match(envText, /AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
     assert.match(envText, /AI_REVIEW_SECOND_API_KEY=<second-api-key>/);
 
@@ -497,7 +527,7 @@ test("code-review-loop install hook appends template when existing env only has 
 
     const envText = await readFile(path.join(destDir, ".env"), "utf8");
     assert.match(envText, /# gskills:code-review-loop env:start/);
-    assert.match(envText, /#主审模型配置/);
+    assert.match(envText, /# 主审模型配置/);
     assert.match(envText, /AI_REVIEW_PRIMARY_BASE_URL=<primary-base-url>/);
     assert.match(envText, /AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
   });

@@ -36,9 +36,15 @@ import {
   writeRequirementAuditArtifacts,
 } from "./requirement-audit.mjs";
 import { assertRequestContext } from "./request-context.mjs";
+import {
+  beginReviewRound,
+  completeReviewRound,
+  reviewRoundLimitResult,
+} from "./review-round-state.mjs";
 import { renderMarkdownReport } from "./review-report.mjs";
 import { createStatusReporter } from "./review-status.mjs";
 import { formatReviewRunId } from "./time-format.mjs";
+import { applyVerificationGate } from "./verification-gate.mjs";
 
 export { resolveMaxReviewRounds };
 
@@ -68,7 +74,7 @@ async function main() {
   }, () => collectReviewContext(options));
   await loadEnvFile(context.root);
   context.reviewLimits = resolveReviewLimits(options);
-  const brief = renderReviewBrief(context);
+  let brief = renderReviewBrief(context);
   await fs.writeFile(path.join(outDir, "latest-brief.md"), brief, "utf8");
   await statusReporter.update({
     phase: "prepare_brief",
@@ -119,7 +125,10 @@ async function main() {
     primaryResolved = resolveProviderOptions(options, assets.providersConfig);
   } catch (error) {
     const fallbackResolved = fallbackPrimaryReviewer(options);
-    const result = providerResolutionFailureResult(error, fallbackResolved);
+    const result = applyVerificationGate(
+      providerResolutionFailureResult(error, fallbackResolved),
+      context.verification,
+    );
     await writeRequirementAuditArtifacts(outDir, result, renderRequirementAuditBrief(context));
     const outputMeta = await writeOutputs(outDir, result, brief, options);
     await appendHistory(outDir, result, options, context, { primary: fallbackResolved, second: null }, outputMeta);
@@ -129,7 +138,7 @@ async function main() {
       verdict: result.verdict,
     });
     process.stdout.write(renderConsoleSummary(result, outDir));
-    process.exitCode = 3;
+    process.exitCode = result.verdict === "fail" ? 2 : 3;
     return;
   }
   const secondReviewSetup = resolveSecondReviewSetup(options, assets.providersConfig);
@@ -144,7 +153,10 @@ async function main() {
   });
 
   if (requirementAudit.result.verdict !== "pass") {
-    const result = decorateRequirementAuditBlock(requirementAudit.result);
+    const result = applyVerificationGate(
+      decorateRequirementAuditBlock(requirementAudit.result),
+      context.verification,
+    );
     const outputMeta = await writeOutputs(outDir, result, requirementAudit.brief, options);
     await appendHistory(outDir, result, options, context, { primary: primaryResolved, second: null }, outputMeta);
     await statusReporter.complete({
@@ -161,6 +173,33 @@ async function main() {
     return;
   }
 
+  const reviewRound = await beginReviewRound({
+    outDir,
+    context,
+    maxReviewRounds: resolveMaxReviewRounds(options),
+    reset: options.resetReviewRounds,
+  });
+  context.reviewLimits.currentRound = reviewRound.round;
+  brief = renderReviewBrief(context);
+  await fs.writeFile(path.join(outDir, "latest-brief.md"), brief, "utf8");
+
+  if (!reviewRound.allowed) {
+    const result = applyVerificationGate(
+      reviewRoundLimitResult(reviewRound),
+      context.verification,
+    );
+    const outputMeta = await writeOutputs(outDir, result, brief, options);
+    await appendHistory(outDir, result, options, context, { primary: primaryResolved, second: null }, outputMeta);
+    await statusReporter.complete({
+      phase: "complete",
+      message: "已达到审核/修复闭环轮次上限。",
+      verdict: result.verdict,
+    });
+    process.stdout.write(renderConsoleSummary(result, outDir));
+    process.exitCode = result.verdict === "fail" ? 2 : 3;
+    return;
+  }
+
   const reviewRun = await runAutoReviewPasses({
     context,
     brief,
@@ -172,7 +211,11 @@ async function main() {
     secondReviewSetup,
     statusReporter,
   });
-  const result = withRequirementAuditPass(reviewRun.result, requirementAudit.result);
+  const result = applyVerificationGate(
+    withRequirementAuditPass(reviewRun.result, requirementAudit.result),
+    context.verification,
+  );
+  await completeReviewRound({ roundState: reviewRound, verdict: result.verdict });
 
   const outputMeta = await writeOutputs(outDir, result, brief, options);
   await appendHistory(outDir, result, options, context, reviewRun.resolved, outputMeta);

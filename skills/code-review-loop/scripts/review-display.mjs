@@ -40,6 +40,7 @@ export function buildHistoryEntry({ result, options = {}, context = {}, resolved
     profile: context?.profile?.selected || options.profile || "standard",
     limits: {
       maxReviewRounds: renderReviewLimitValue(context?.reviewLimits?.maxReviewRounds ?? options.maxReviewRounds),
+      currentRound: context?.reviewLimits?.currentRound ?? null,
     },
     scope: {
       staged: Boolean(context?.scope?.staged),
@@ -76,6 +77,7 @@ export function renderHistoryMarkdownEntry(entry) {
     + `- 审核模型: ${renderReviewers(entry.reviewers)}\n`
     + `- 审核配置: ${entry.profile}\n`
     + `- 审核轮数上限: ${entry.limits?.maxReviewRounds || "3"}\n`
+    + `- 当前审核轮次: ${entry.limits?.currentRound ?? "未记录"}\n`
     + `- 变更文件数: ${entry.changedFileCount ?? "未知"}\n`
     + `- 审核详情: ${entry.details.runReportPath || entry.details.latestReportPath || "未知"}\n`
     + `- 结构化结果: ${entry.details.runResultPath || entry.details.latestResultPath || "未知"}\n`

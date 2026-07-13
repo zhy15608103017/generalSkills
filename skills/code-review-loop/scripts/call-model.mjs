@@ -176,7 +176,12 @@ export function resolveProviderOptions(options = {}, providersConfig = loadFallb
     responseFormat: process.env.AI_REVIEW_RESPONSE_FORMAT || providerConfig.responseFormat || "json_object",
     requestOptions: providerConfig.requestOptions || {},
     strictSchema: booleanValue(process.env.AI_REVIEW_STRICT_SCHEMA, providerConfig.strictSchema, true),
-    strictOutput: booleanValue(process.env.AI_REVIEW_STRICT_OUTPUT, providerConfig.strictOutput, false),
+    strictOutput: booleanValue(
+      options.strictOutput,
+      process.env.AI_REVIEW_STRICT_OUTPUT,
+      providerConfig.strictOutput,
+      true,
+    ),
     timeoutMs,
     retries,
     retryFastFailureMs,

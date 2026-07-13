@@ -154,9 +154,13 @@ function renderProfile(profile = {}) {
 }
 
 function renderReviewLimits(reviewLimits = {}) {
-  return [
+  const lines = [
     `最大审核/修复轮数: ${renderReviewLimitValue(reviewLimits.maxReviewRounds)}`,
-  ].join("\n");
+  ];
+  if (Number.isInteger(reviewLimits.currentRound)) {
+    lines.push(`当前审核轮次: ${reviewLimits.currentRound}`);
+  }
+  return lines.join("\n");
 }
 
 function renderVerifications(verification) {

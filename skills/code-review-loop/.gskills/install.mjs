@@ -1,5 +1,5 @@
 import path from "node:path";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 
 const INSTRUCTIONS = [
   "## AI Code Review",
@@ -12,6 +12,7 @@ const ENV_IGNORE_ENTRY = ".env";
 const ENV_TEMPLATE_FILE = path.join("assets", "env-template.env");
 const ENV_TEMPLATE_START = "# gskills:code-review-loop env:start";
 const ENV_TEMPLATE_END = "# gskills:code-review-loop env:end";
+const CANONICAL_SKILL_PATH = ".agents/skills/code-review-loop";
 const DEFAULT_REVIEW_IGNORE = [
   "# Lockfiles are often huge; remove these lines when lockfile review is needed.",
   "pnpm-lock.yaml",
@@ -23,11 +24,44 @@ const DEFAULT_REVIEW_IGNORE = [
 export async function install(context) {
   await upsertAgentsBlock(context.destDir, context.skillName, INSTRUCTIONS);
   await ensureEnvTemplate(context.destDir, context.skillDir);
+  await rewriteInstalledSkillPaths(context.destDir, context.targets || []);
   await removeInstalledAssets(context.targets || []);
   await ensureGitignoreEntry(context.destDir, ENV_IGNORE_ENTRY);
   await ensureGitignoreEntry(context.destDir, REVIEW_IGNORE_ENTRY);
   await ensureGitignoreEntry(context.destDir, REVIEW_SCOPE_IGNORE_ENTRY);
   await ensureReviewIgnoreFile(context.destDir);
+}
+
+async function rewriteInstalledSkillPaths(destDir, targets) {
+  for (const target of targets) {
+    const installedSkillPath = path
+      .relative(destDir, target.installedPath)
+      .replace(/\\/g, "/");
+    const markdownFiles = await listMarkdownFiles(target.installedPath);
+
+    for (const filePath of markdownFiles) {
+      const existingText = await readFile(filePath, "utf8");
+      const updatedText = existingText.replaceAll(CANONICAL_SKILL_PATH, installedSkillPath);
+      if (updatedText !== existingText) {
+        await writeFile(filePath, updatedText, "utf8");
+      }
+    }
+  }
+}
+
+async function listMarkdownFiles(rootDir) {
+  const files = [];
+  const entries = await readdir(rootDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === ".gskills") continue;
+    const entryPath = path.join(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await listMarkdownFiles(entryPath));
+    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      files.push(entryPath);
+    }
+  }
+  return files;
 }
 
 async function upsertAgentsBlock(destDir, skillName, instructions) {

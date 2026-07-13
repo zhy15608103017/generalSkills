@@ -24,7 +24,7 @@ shell 环境变量优先于 `.env`。`.env` 只会补充当前尚未设置的变
   "localCli": "codex",
   "responseFormat": "json_object",
   "strictSchema": true,
-  "strictOutput": false,
+  "strictOutput": true,
   "timeoutMs": 120000,
   "retries": 3,
   "retryFastFailureMs": 10000,
@@ -37,81 +37,11 @@ shell 环境变量优先于 `.env`。`.env` 只会补充当前尚未设置的变
 
 provider 定义里只应包含 provider 级别的环境变量，例如 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY` 或 `EXAMPLE_BASE_URL`。不要把 `AI_REVIEW_PRIMARY_API_KEY`、`AI_REVIEW_SECOND_API_KEY`、`AI_REVIEW_PRIMARY_BASE_URL`、`AI_REVIEW_SECOND_BASE_URL` 这类运行时路由变量写进 `model-providers.json`；这些值应由审查运行器在执行时解析。
 
-## 主 provider
+## 运行时路由配置
 
-主模型环境变量：
+主审、二审、重试、超时、严格输出、审查轮次和 `.env` 示例统一以 `references/configuration.md` 为准。本文件只维护 provider 定义、provider 专属凭证回退和 transport 差异，避免两份运行时配置说明发生漂移。
 
-```text
-AI_REVIEW_PRIMARY_PROVIDER=deepseek
-AI_REVIEW_PRIMARY_MODEL=deepseek-v4-pro
-AI_REVIEW_PRIMARY_BASE_URL=https://api.deepseek.com/v1
-AI_REVIEW_PRIMARY_API_KEY=<key>
-AI_REVIEW_TRANSPORT=openai-compatible
-AI_REVIEW_API_STYLE=chat
-AI_REVIEW_LOCAL_CLI=codex
-AI_REVIEW_LOCAL_CLI_ARGS=<extra trusted args>
-AI_REVIEW_CLI_COMMAND=<command>
-```
-
-第二审查员环境变量：
-
-```text
-AI_REVIEW_SECOND_PROVIDER=openai
-AI_REVIEW_SECOND_MODEL=gpt-5.5
-AI_REVIEW_SECOND_BASE_URL=https://api.openai.com/v1
-AI_REVIEW_SECOND_API_KEY=<key>
-AI_REVIEW_SECOND_TRANSPORT=responses
-AI_REVIEW_SECOND_API_STYLE=responses
-AI_REVIEW_SECOND_LOCAL_CLI=claude
-AI_REVIEW_SECOND_LOCAL_CLI_ARGS=<extra trusted args>
-AI_REVIEW_SECOND_CLI_COMMAND=<command>
-AI_REVIEW_SECOND_REVIEW_MODE=auto
-AI_REVIEW_SECOND_P0_THRESHOLD=1
-AI_REVIEW_SECOND_P1_THRESHOLD=1
-AI_REVIEW_SECOND_P2_THRESHOLD=3
-```
-
-通用运行时环境变量：
-
-```text
-AI_REVIEW_STRICT_SCHEMA=true
-AI_REVIEW_STRICT_OUTPUT=false
-AI_REVIEW_TIMEOUT_MS=120000
-AI_REVIEW_RETRIES=3
-AI_REVIEW_RETRY_FAST_FAILURE_MS=10000
-AI_REVIEW_RETRY_DELAY_MS=5000
-AI_REVIEW_MAX_REVIEW_ROUNDS=3
-```
-
-仓库根目录 `.env` 示例：
-
-```text
-AI_REVIEW_PRIMARY_PROVIDER=deepseek
-AI_REVIEW_PRIMARY_MODEL=deepseek-v4-pro
-AI_REVIEW_PRIMARY_API_KEY=<key>
-AI_REVIEW_SECOND_PROVIDER=openai
-AI_REVIEW_SECOND_MODEL=gpt-5.5
-AI_REVIEW_SECOND_API_KEY=<key>
-AI_REVIEW_SECOND_TRANSPORT=responses
-AI_REVIEW_SECOND_API_STYLE=responses
-AI_REVIEW_SECOND_REVIEW_MODE=auto
-AI_REVIEW_SECOND_P0_THRESHOLD=1
-AI_REVIEW_SECOND_P1_THRESHOLD=1
-AI_REVIEW_SECOND_P2_THRESHOLD=3
-```
-
-`PRIMARY` 会先执行。只有当第二审查员的路由配置存在、可解析到可用凭证，并且 `AI_REVIEW_SECOND_REVIEW_MODE` 允许时，才会在主审后运行 `SECOND`。`AI_REVIEW_SECOND_API_KEY` 只提供第二审查员的凭证，不会单独开启第二轮审查。
-
-第二审模式：
-
-```text
-AI_REVIEW_SECOND_REVIEW_MODE=always  # 只要第二审路由和凭证可用就始终运行
-AI_REVIEW_SECOND_REVIEW_MODE=auto    # 默认值；当 PRIMARY 达到 P0/P1/P2 阈值时才运行 SECOND
-AI_REVIEW_SECOND_REVIEW_MODE=off     # 永不运行 SECOND
-AI_REVIEW_SECOND_P0_THRESHOLD=1
-AI_REVIEW_SECOND_P1_THRESHOLD=1
-AI_REVIEW_SECOND_P2_THRESHOLD=3
-```
+`PRIMARY` 会先执行。只有当二审路由配置存在、可解析到可用凭证，并且 `AI_REVIEW_SECOND_REVIEW_MODE` 允许时，才会运行 `SECOND`。`AI_REVIEW_SECOND_API_KEY` 只提供凭证，不会单独开启二审。
 
 provider 专属 key 回退来源配置在 `model-providers.json` 中。当前内置 provider 包括：
 
@@ -207,6 +137,7 @@ AI_REVIEW_THINKING_TYPE=enabled
 --retry-fast-failure-ms <milliseconds>
 --retry-delay-ms <milliseconds>
 --max-review-rounds <count|infinity>
+--reset-review-rounds
 --time-zone <iana-zone|offset|system>
 --history-limit <count>
 --profile standard|auto|high-accuracy
@@ -227,6 +158,8 @@ AI_REVIEW_THINKING_TYPE=enabled
 --allow-outside-docs
 --allow-empty
 --dry-run
+--strict-output
+--relaxed-output
 ```
 
 ## 推荐默认值

@@ -1,6 +1,6 @@
 ---
 name: prototype-to-existing-ui
-description: 当需要根据产品原型图、线框图、视觉稿、截图、Figma 导出或 UI 图片生成或修改前端页面，并且实现必须贴合现有项目的 UI 风格、主题色、圆角体系、间距、字体、组件库和可复用组件时使用。若项目根目录存在固定参考目录 `.ui-reference/`，优先读取该目录；否则先从现有代码库推断整体风格，再开始实现。
+description: Use when converting prototypes, wireframes, mockups, Figma exports, screenshots, or UI images into frontend pages that must match the existing project's design system, theme colors, radii, spacing, fonts, component library, and reusable components; read `.ui-reference/` first, otherwise infer the style from the codebase. 当需要把产品原型、线框图、视觉稿、截图或 Figma 导出转成贴合现有项目 UI 风格与组件库的前端页面时使用。
 ---
 
 # 原型转现有 UI
@@ -15,7 +15,7 @@ description: 当需要根据产品原型图、线框图、视觉稿、截图、F
 2. 从仓库根目录查找固定项目参考目录：`.ui-reference/`。
 3. 如果 `.ui-reference/` 存在，先读取它，并将其作为项目 UI 决策的主要来源。
 4. 如果 `.ui-reference/` 不存在、为空或信息不足，再从设计 token、主题文件、全局样式、共享组件和相似页面中推断项目风格。
-5. 编码前形成一份简短的内部风格摘要：颜色、圆角、间距、字体、阴影、边框、布局密度、图标体系、组件库和可复用组件。
+5. 编码前形成一份简短的内部风格摘要：颜色、圆角、间距、字体、阴影、边框、布局密度、图标体系、组件库和可复用组件。需要可复现的摘要时，运行 `scripts/discover-style.mjs` 生成 `.ai-ui/style-snapshot.md`（见「风格快照」）。
 6. 先把原型元素映射到现有项目组件，再决定是否需要新增标记或样式。
 7. 用最小的页面或组件改动满足原型，同时保持项目已有前端架构。
 8. 运行项目相关验证命令，例如 lint、typecheck、测试或视觉冒烟检查。
@@ -52,6 +52,16 @@ description: 当需要根据产品原型图、线框图、视觉稿、截图、F
 ```
 
 不要要求每个项目都包含所有文件。使用已经存在的内容即可。除非用户明确要求，或当前任务就是建立项目 UI 参考，否则不要主动创建该目录。
+
+## 风格快照
+
+需要可复现、可跨会话复用的风格摘要时，运行本技能自带脚本，把检测结果持久化到仓库根目录的 `.ai-ui/style-snapshot.md`：
+
+```bash
+node .agents/skills/prototype-to-existing-ui/scripts/discover-style.mjs [--root <path>] [--output <path>] [--no-write] [--json]
+```
+
+脚本会扫描 `.ui-reference/`、设计 token 文件（`tailwind.config.*`、`theme.*`、`tokens.*`、`design-system.*`）、CSS 变量、`package.json` 依赖和共享组件目录，产出颜色、圆角、间距、字体、阴影、组件库、图标体系和可复用组件的快照。`.ai-ui/` 是缓存目录，建议加入 `.gitignore`。除非用户要求，不要把整份快照粘贴进最终回复；它用于指导实现决策，并可在会话间复用。
 
 ## 参考资料
 

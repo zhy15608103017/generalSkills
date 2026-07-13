@@ -234,7 +234,7 @@ AI_REVIEW_MAX_REVIEW_ROUNDS=3
 AI_REVIEW_REASONING_EFFORT=high
 AI_REVIEW_RESPONSE_FORMAT=json_object
 AI_REVIEW_STRICT_SCHEMA=true
-AI_REVIEW_STRICT_OUTPUT=false
+AI_REVIEW_STRICT_OUTPUT=true
 AI_REVIEW_THINKING_TYPE=enabled
 AI_REVIEW_LOCAL_CLI=codex
 AI_REVIEW_LOCAL_CLI_ARGS=<trusted-args>
@@ -258,7 +258,7 @@ AI_REVIEW_MAX_REVIEW_ROUNDS  审查/修复闭环最大轮数，默认 3；设为
 AI_REVIEW_REASONING_EFFORT   Responses API 推理强度
 AI_REVIEW_RESPONSE_FORMAT    输出格式
 AI_REVIEW_STRICT_SCHEMA      Responses API 是否启用严格 JSON schema
-AI_REVIEW_STRICT_OUTPUT      本地是否严格校验审查结果结构；默认 false，设为 true 时启用强校验
+AI_REVIEW_STRICT_OUTPUT      本地是否严格校验审查结果结构；默认 true。仅在兼容旧模型输出时显式设为 false
 AI_REVIEW_THINKING_TYPE      兼容部分支持 thinking 字段的模型
 AI_REVIEW_LOCAL_CLI          主模型本地 AI CLI 预设，可选 claude、opencode、codex
 AI_REVIEW_LOCAL_CLI_ARGS     主模型本地 AI CLI 额外可信参数
@@ -493,6 +493,18 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --timeout-ms 180000 -
 ```bash
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --max-review-rounds 5
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --max-review-rounds infinity
+```
+
+工具会按请求上下文指纹记录连续未通过轮次；`pass` 后自动清零，新请求自动开始新闭环。需要人工开始新闭环时使用：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --reset-review-rounds
+```
+
+模型输出默认严格校验。仅为兼容旧模型时显式放宽：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --relaxed-output
 ```
 
 覆盖自动分片上限：

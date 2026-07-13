@@ -26,7 +26,9 @@
 - 当前编码 agent 负责判断、修复、验证和重新审查。
 - `P0`、`P1` 为阻塞问题；`P2`、`P3` 默认属于非阻塞提醒。
 - 审查上下文必须覆盖用户原始请求、用户纠正、当前理解、明确反例、验收标准、diff、相关文件上下文、验证结果和项目规则。
-- 默认最多循环三轮审查与修复；可通过 `AI_REVIEW_MAX_REVIEW_ROUNDS` 或 `--max-review-rounds` 调整。值为 `infinity` 时表示不设上限。达到上限后仍存在阻塞问题时，应交由人工决策。
+- 每次正式代码审查算一轮。工具按请求上下文指纹记录连续未通过轮次，默认最多三轮；`pass` 或新请求会重置闭环。可通过 `AI_REVIEW_MAX_REVIEW_ROUNDS` 或 `--max-review-rounds` 调整，必要时用 `--reset-review-rounds` 显式重置。
+- `--verify` 中任意命令退出码非零时，工具会确定性返回 `fail`，不依赖审查模型发现验证失败。
+- 模型输出默认严格校验完整 schema；只在兼容旧模型时显式使用 `--relaxed-output`。
 
 ## 两阶段审查
 
@@ -119,6 +121,7 @@ git status --short
 git diff --check
 pnpm test
 pnpm lint
+node .agents/skills/code-review-loop/scripts/check-syntax.mjs
 ```
 
 4. 运行 AI 审查。
@@ -237,6 +240,12 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --staged --verify "gi
 
 ```bash
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --no-requirement-audit-cache --verify "git diff --check"
+```
+
+显式重置当前请求的连续未通过轮次：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --reset-review-rounds --verify "git diff --check"
 ```
 
 启用第二审查模型，双模型配置见 `references/configuration.md`：

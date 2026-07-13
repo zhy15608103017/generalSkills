@@ -264,6 +264,13 @@ test("parseReviewResult reports malformed JSON with parser detail and output pre
   );
 });
 
+test("parseReviewResult rejects incomplete pass payloads in strict mode", () => {
+  assert.throws(
+    () => parseReviewResult('{"verdict":"pass"}'),
+    /summary is not a string/,
+  );
+});
+
 for (const scenario of [
   {
     name: "missing API key",
@@ -920,6 +927,33 @@ test("ai-review dry-run can inspect a brief before request context exists", asyn
     assert.equal(result.verdict, "needs_human");
     assert.match(result.summary, /dry-run 已完成/);
     assert.match(brief, /未提供需求、设计、计划或额外文档。/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("ai-review fails fast when the requested Git base is invalid", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-invalid-base-"));
+  try {
+    await execFileAsync("git", ["init"], { cwd: tempDir });
+
+    const scriptPath = path.join(repoRoot, "skills", "code-review-loop", "scripts", "ai-review.mjs");
+    await execFileAsync(
+      process.execPath,
+      [scriptPath, "--dry-run", "--base", "definitely-not-a-ref"],
+      { cwd: tempDir, windowsHide: true },
+    ).then(
+      () => assert.fail("expected ai-review to reject an invalid Git base"),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.match(error.stderr, /Git 命令执行失败/);
+        assert.match(error.stderr, /definitely-not-a-ref/);
+      },
+    );
+
+    const status = JSON.parse(await readFile(path.join(tempDir, ".ai-review", "latest-status.json"), "utf8"));
+    assert.equal(status.status, "failed");
+    assert.match(status.message, /Git 命令执行失败/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

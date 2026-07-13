@@ -1,4 +1,3 @@
-interface:
-  display_name: "原型转现有 UI"
-  short_description: "按项目风格实现原型。"
-  default_prompt: "使用 $prototype-to-existing-ui 根据项目的 .ui-reference/ 参考资料和现有组件实现这个原型。"
+display_name: 原型转现有 UI
+short_description: 按项目风格实现原型。
+default_prompt: 使用 $prototype-to-existing-ui 根据项目的 .ui-reference/ 参考资料和现有组件实现这个原型。

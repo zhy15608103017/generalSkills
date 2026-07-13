@@ -1,6 +1,6 @@
 # code-review-loop 使用与配置报告
 
-本文基于 `skills/code-review-loop` 的当前源码和参考文档整理，目标是作为以后使用、排查和维护 `code-review-loop` skill 的一份集中手册。
+本文是面向仓库维护者的汇总手册。运行时配置的权威来源是 `skills/code-review-loop/references/configuration.md`，provider 定义的权威来源是 `skills/code-review-loop/references/provider-config.md` 与 `model-providers.json`；本文不再作为配置默认值的单一事实来源。
 
 ## 一句话理解
 
@@ -37,10 +37,14 @@ skills/code-review-loop/
     review-checklist.md            通用审核清单
   scripts/
     ai-review.mjs                  主入口：编排上下文、模型调用、输出和历史
-    collect-context.mjs            收集 Git diff、文档、文件上下文、验证输出、CodeGraph
+    collect-context.mjs            收集文档、文件上下文、验证输出、CodeGraph
+    git-context.mjs                Git 根目录、审查范围和 fail-fast Git 命令
     call-model.mjs                 provider 解析和模型调用
+    check-syntax.mjs               对 skill 内全部 .mjs 执行可重复语法检查
     write-review-context.mjs       生成 .ai-review/review-context/current-request.md
     requirement-audit.mjs          需求理解 gate
+    review-round-state.mjs         连续未通过审核轮次的持久化与上限门禁
+    verification-gate.mjs          将失败的本地验证确定性提升为 P1
     review-profile.mjs             standard/auto/high-accuracy profile
     review-report.mjs              Markdown 报告渲染
     review-display.mjs             history 与展示字段
@@ -184,7 +188,7 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs \
 | `AI_REVIEW_MAX_REVIEW_ROUNDS` | 正整数或 `infinity`；默认 `3` | 审核/修复闭环最大轮数。 |
 | `AI_REVIEW_REASONING_EFFORT` | OpenAI Responses API 支持的 reasoning effort，常用 `low`、`medium`、`high`；默认 `high` | 仅对支持 reasoning effort 的 Responses API 模型有意义。 |
 | `AI_REVIEW_RESPONSE_FORMAT` | `json_object`、`json_schema`，或 provider 支持的响应格式 | Chat Completions 默认通常为 `json_object`；OpenAI Responses provider 默认使用 `json_schema`。 |
-| `AI_REVIEW_STRICT_SCHEMA` / `AI_REVIEW_STRICT_OUTPUT` | `true`、`false` | 控制 Responses API 严格 JSON schema 和本地严格输出校验。 |
+| `AI_REVIEW_STRICT_SCHEMA` / `AI_REVIEW_STRICT_OUTPUT` | `true`、`true` | 控制 Responses API 严格 JSON schema 和本地严格输出校验。只有兼容旧模型时才显式关闭本地严格校验。 |
 | `AI_REVIEW_THINKING_TYPE` | `enabled`、`disabled`，或 provider 支持的 thinking type | GLM 类 provider 默认可用 `enabled`；网关拒绝 thinking 字段时设为 `disabled`。 |
 | `AI_REVIEW_STREAMING` | `true`、`false`；默认 `false` | Chat Completions 是否使用流式读取。 |
 | `AI_REVIEW_TIME_ZONE` | IANA 时区、固定偏移或 `system`，例如 `Asia/Shanghai`、`UTC`、`+08:00` | 控制报告时间和 run id 时区。 |
@@ -279,7 +283,7 @@ retries=3
 | `AI_REVIEW_REASONING_EFFORT` | `high` | Responses API 的 reasoning effort |
 | `AI_REVIEW_RESPONSE_FORMAT` | provider 默认；否则 `json_object` | chat completions 的响应格式 |
 | `AI_REVIEW_STRICT_SCHEMA` | provider 默认；否则 `true` | Responses API 是否启用严格 JSON schema |
-| `AI_REVIEW_STRICT_OUTPUT` | provider 默认；否则 `false` | 本地是否严格校验模型输出结构 |
+| `AI_REVIEW_STRICT_OUTPUT` | provider 默认；否则 `true` | 本地是否严格校验模型输出结构；仅在兼容旧模型时显式设为 `false` 或使用 `--relaxed-output` |
 | `AI_REVIEW_THINKING_TYPE` | provider requestOptions 里的 thinking type | 控制兼容 thinking 字段的模型 |
 | `AI_REVIEW_STREAMING` | `false` | chat completions 是否使用流式读取 |
 | `AI_REVIEW_MAX_REVIEW_ROUNDS` | `3` | 审核/修复闭环最大轮数；`infinity` 表示无上限 |
@@ -788,7 +792,7 @@ AI_REVIEW_SECOND_RETRY_DELAY_MS=5000
 脚本会对空输出或无合法 JSON 的情况按同一组可配置重试参数重试。如果仍失败，建议：
 
 - 换 `responseFormat`。
-- 开启 `AI_REVIEW_STRICT_OUTPUT=true` 让本地更严格暴露问题。
+- 默认保持 `AI_REVIEW_STRICT_OUTPUT=true`；只有兼容无法返回完整 schema 的旧模型时才临时关闭。
 - 对 OpenAI-compatible 网关确认是否支持 `response_format: { type: "json_object" }`。
 - 对 CLI reviewer 确认 stdout 是单个 JSON 对象。
 
