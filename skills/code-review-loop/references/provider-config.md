@@ -160,6 +160,7 @@ AI_REVIEW_THINKING_TYPE=enabled
 --dry-run
 --strict-output
 --relaxed-output
+--clean
 ```
 
 ## 推荐默认值

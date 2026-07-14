@@ -91,6 +91,8 @@ export function parseArgs(argv) {
       args.allowOutsideDocs = true;
     } else if (arg === "--allow-empty") {
       args.allowEmpty = true;
+    } else if (arg === "--clean") {
+      args.clean = true;
     } else if (arg === "--verify" && next) {
       args.verifications.push(next);
       index += 1;

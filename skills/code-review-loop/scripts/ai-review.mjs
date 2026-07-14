@@ -65,6 +65,16 @@ async function main() {
   });
   await clearShardBriefArtifacts(outDir);
 
+  if (options.clean) {
+    await cleanReviewArtifacts(outDir, statusReporter);
+    process.stdout.write(`已清理可重新生成的 .ai-review/ 产物（保留 review-context/）: ${outDir}\n`);
+    await statusReporter.complete({
+      phase: "complete",
+      message: "已清理审查产物。",
+    });
+    return;
+  }
+
   if (!options.dryRun) {
     await assertRequestContext(root, options);
   }
@@ -644,6 +654,37 @@ async function writeShardBriefArtifacts(outDir, shardRuns) {
 
 async function clearShardBriefArtifacts(outDir) {
   await fs.rm(path.join(outDir, "shards"), { recursive: true, force: true });
+}
+
+const CLEANABLE_REVIEW_ENTRIES = [
+  "cache",
+  "shards",
+  "runs",
+  "history.jsonl",
+  "history.md",
+  "latest-brief.md",
+  "latest-report.md",
+  "latest-result.json",
+  "latest-status.json",
+  "latest-status.md",
+  "latest-requirement-audit-result.json",
+  "latest-requirement-audit-brief.md",
+];
+
+async function cleanReviewArtifacts(outDir, statusReporter = null) {
+  await statusReporter?.update?.({
+    phase: "clean",
+    message: "正在清理可重新生成的 .ai-review/ 产物（保留 review-context/）。",
+  });
+  await Promise.all(
+    CLEANABLE_REVIEW_ENTRIES.map(async (entry) => {
+      try {
+        await fs.rm(path.join(outDir, entry), { recursive: true, force: true });
+      } catch {
+        // best-effort: missing entries are fine
+      }
+    }),
+  );
 }
 
 function shardBriefArtifactNote(artifacts) {

@@ -10,6 +10,7 @@
 - [自动策略与进度](#自动策略与进度)
 - [标准流程](#标准流程)
 - [推荐命令模板](#推荐命令模板)
+- [`.ai-review/` 产物与清理](#aireview-产物与清理)
 - [`.ai-reviewignore`](#ai-reviewignore)
 - [结果处理建议](#结果处理建议)
 
@@ -253,6 +254,32 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --reset-review-rounds
 ```bash
 node .agents/skills/code-review-loop/scripts/ai-review.mjs --path src --second-provider openai --second-model gpt-5.5
 ```
+
+## `.ai-review/` 产物与清理
+
+`.ai-review/` 目录会在使用过程中积累多种产物。它们的保留与清理策略如下：
+
+| 产物 | 作用 | 保留策略 |
+|---|---|---|
+| `review-context/` | 请求上下文，包含 `current-request.md` | **不会自动清理**。属于人工或 agent 写入的输入，清理时会被显式保留。 |
+| `latest-brief.md`、`latest-result.json`、`latest-report.md`、`latest-status.*` | 最近一次审查的可重新生成产物 | 每次审查运行都会被覆盖。 |
+| `latest-requirement-audit-*` | 最近一次需求理解审计产物 | 每次审查运行都会被覆盖。 |
+| `shards/` | 自动分片审查的各分片 brief | 每次审查运行开始时先递归删除再重新生成，不会跨运行累积。 |
+| `cache/` | `requirement-audit.json`（需求审计缓存）、`review-round.json`（轮次状态）、`file-contexts.json`（文件上下文缓存，最多保留 200 条） | 逐条过期或覆盖；`file-contexts.json` 超过 200 条时按 mtime 裁剪。需求审计缓存在上下文/提示词/模型变化时自动失效。 |
+| `runs/` | 历史审查运行目录 | 由 `AI_REVIEW_HISTORY_LIMIT`（默认 `5`，设为 `0` 不保留）控制；超出上限的旧运行目录会被自动删除。 |
+| `history.jsonl`、`history.md` | 历史审查索引 | 同样受 `AI_REVIEW_HISTORY_LIMIT` 控制，只保留最近 N 条。 |
+
+### 一键清理
+
+需要彻底清理可重新生成的产物时（例如切换分支、清理脱敏残留、回收磁盘），使用：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --clean
+```
+
+`--clean` 会递归删除 `cache/`、`shards/`、`runs/`、`history.jsonl`、`history.md` 以及全部 `latest-*` 产物，然后立即退出，不调用审查模型。它**不会删除** `review-context/`，因为那里存放的是人工或 agent 写入的请求上下文。如果确实要重置请求上下文，请手动删除或覆盖 `.ai-review/review-context/current-request.md`。
+
+`.ai-review/` 下所有产物都应按本地敏感信息处理，不要上传到公开位置。
 
 ## `.ai-reviewignore`
 

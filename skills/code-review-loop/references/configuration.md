@@ -10,6 +10,7 @@
 - [主模型变量](#主模型变量)
 - [第二模型变量](#第二模型变量)
 - [通用运行变量](#通用运行变量)
+- [需求理解审计缓存](#需求理解审计缓存)
 - [`transport` 与 `api style`](#transport-与-api-style)
 - [内置 provider](#内置-provider)
 - [Provider 示例](#provider-示例)
@@ -18,6 +19,7 @@
 - [安全建议](#安全建议)
 - [`.ai-reviewignore`](#ai-reviewignore)
 - [故障排查](#故障排查)
+- [`--relaxed-output` 兼容性](#relaxed-output-兼容性)
 
 ## 配置来源优先级
 
@@ -268,6 +270,36 @@ AI_REVIEW_STATUS_HEARTBEAT_MS 状态 heartbeat 间隔毫秒，默认 15000；设
 AI_REVIEW_TIME_ZONE          审查产物时间戳时区；不设置时使用当前环境时区，支持 IANA 名称或 +08:00 这类固定偏移，显示格式为 YYYY-MM-DD hh:mm:ss
 AI_REVIEW_HISTORY_LIMIT      历史审查保留条数；默认 5，设为 0 时不保留历史运行目录和历史索引
 ```
+
+## 需求理解审计缓存
+
+非 `dry-run` 审查会先执行一次需求理解审计。审计返回 `pass` 时，结果会被缓存到 `.ai-review/cache/requirement-audit.json`，下一次审查若缓存键匹配则跳过审计直接复用。
+
+### 缓存键构成
+
+缓存键是对以下字段做 SHA-256 得到的十六进制指纹（实现见 `scripts/requirement-audit.mjs` 的 `buildRequirementAuditCacheKey`）：
+
+```text
+{
+  version: "v1",                              // REQUIREMENT_AUDIT_CACHE_VERSION
+  root: <仓库根目录绝对路径>,
+  projectRules: <AGENTS.md 等项目规则内容>,
+  docs: [                                      // 通过 --doc / --checklist 传入的额外文档
+    { label, path, contentHash, contentBytes, content }
+  ],
+  auditPrompt: <references/requirement-auditor-prompt.md 的完整内容>,
+  reviewer: {
+    provider: <主审 provider>,                 // 例如 deepseek / openai
+    model: <主审 model>,                        // 例如 deepseek-v4-pro / gpt-5.5
+  }
+}
+```
+
+只要其中任意一项变化，缓存键就会不同，审计会重新执行。特别说明：
+
+- **模型字段是 provider + model 字符串**，不是模型版本快照。如果服务商在同一个 model 名下静默升级了底层模型版本，缓存键不会变化，可能继续复用旧审计结果。遇到这种情况，用 `--no-requirement-audit-cache` 强制重跑一次审计，或删除 `.ai-review/cache/requirement-audit.json`。
+- **请求上下文（`current-request.md`）不直接进入缓存键**。`request`、`corrections`、`understanding` 等字段的变化通过 `collect-context.mjs` 收集后参与 brief，但需求审计缓存键只看上述 payload。这意味着：同一仓库、同一模型、同一提示词下，只要文档与规则不变，`pass` 的需求审计会被复用；如果用户改写了请求上下文但未改变项目规则或文档，需求审计仍可能命中缓存。需要强制重新审计时使用 `--no-requirement-audit-cache`。
+- 只有 `verdict === "pass"` 的结果才会被缓存；`fail` 和 `needs_human` 不会写入缓存。
 
 ## `transport` 与 `api style`
 
@@ -689,3 +721,34 @@ AI_REVIEW_RETRY_DELAY_MS=5000
 ```bash
 --timeout-ms 180000 --retries 3 --retry-fast-failure-ms 10000 --retry-delay-ms 5000
 ```
+
+## `--relaxed-output` 兼容性
+
+默认情况下审查模型返回的 JSON 会经过**严格结构校验**（`AI_REVIEW_STRICT_OUTPUT=true`）：顶层字段、`verdict` 枚举、`blocking_findings`/`warnings` 数组结构、`confidence` 取值范围都必须完全匹配 `references/review-result.schema.json`，否则视为模型调用失败并按重试预算重试。这能保证门禁可靠性，但部分模型无法稳定返回完整 schema。
+
+只有以下情况才应显式放宽为 `--relaxed-output` / `AI_REVIEW_STRICT_OUTPUT=false`：
+
+| 模型类型 | 是否需要 relaxed | 说明 |
+|---|---|---|
+| OpenAI Responses API（`gpt-5.5` 等） | 否 | 启用 `strictSchema` 即可稳定返回。 |
+| DeepSeek `deepseek-v4-pro` / 其他 v3+ 兼容模型 | 否 | 默认严格输出可用。 |
+| GLM / Zhipu / Z.ai（`glm-5.1` 等） | 否 | 默认严格输出可用。 |
+| MiMo / Xiaomi（`mimo-v2.5-pro`） | 否 | 默认严格输出可用。 |
+| 本地 CLI 预设（`claude` / `codex` / `opencode`） | 视版本而定 | 多数情况下严格可用；若 CLI 版本输出不稳定，先尝试 `--strict-output`，仍失败再降级。 |
+| 自定义 `--cli-command` 审查员 | 视实现而定 | 取决于命令返回的 JSON 是否严格符合 schema。 |
+| 旧版或精简版 OpenAI-compatible 模型（参数量小、不支持 `response_format=json_object` 或经常截断输出） | 是 | 当严格模式连续重试失败、错误信息显示 schema 不匹配时，再切换为 `--relaxed-output`。 |
+
+### 放宽后的代价
+
+`--relaxed-output` 会跳过 `validateRawResult` 的字段与类型校验，只做最小可用解析：仍要求能解析出 JSON 和 `verdict`，但不再强制 `blocking_findings`、`warnings`、`confidence` 的类型与范围。这可能导致：
+
+- 缺失或类型错误的 `blocking_findings` 被当作"无阻塞"，**降低门禁可靠性**。
+- `confidence` 缺失时被规范化为 `0`，可能误触发第二审查员。
+- 部分非阻塞 `warnings` 丢失。
+
+### 诊断建议
+
+1. 先用 `--dry-run` 确认 brief 是否合理。
+2. 严格模式下若连续 `AI_REVIEW_RETRIES` 次失败，查看 `.ai-review/latest-result.json` 中的错误信息。
+3. 如果错误明确指向 schema（例如 `invalid verdict`、`blocking_findings is not an array`），再临时使用 `--relaxed-output`，并在配置稳定后尽快切回 `--strict-output`。
+4. 长期需要 relaxed 的模型，建议在 `references/model-providers.json` 的对应 provider 中设置 `"strictOutput": false`，而不是全局关闭。

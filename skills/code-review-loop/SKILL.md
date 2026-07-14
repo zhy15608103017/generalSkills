@@ -96,6 +96,7 @@ node .agents/skills/code-review-loop/scripts/ai-review.mjs --profile auto --veri
 ## 参考资料
 
 - 工作流与完整命令目录：`references/workflow.md`
+- 脚本职责速查表：`references/scripts-overview.md`
 - 配置说明：`references/configuration.md`
 - Provider 配置：`references/provider-config.md`
 - 需求理解审计提示词：`references/requirement-auditor-prompt.md`
