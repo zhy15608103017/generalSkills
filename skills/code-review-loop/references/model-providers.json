@@ -1,5 +1,4 @@
 {
-  "defaultProvider": "deepseek",
   "providers": {
     "deepseek": {
       "aliases": [],
@@ -46,9 +45,7 @@
     },
     "openai-compatible": {
       "aliases": ["compatible"],
-      "model": "gpt-5.5",
       "transport": "openai-compatible",
-      "baseUrl": "https://api.openai.com/v1",
       "apiStyle": "chat",
       "apiKeyEnv": [],
       "responseFormat": "json_object"

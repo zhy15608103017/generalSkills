@@ -48,7 +48,9 @@ export function parseArgs(argv) {
     const arg = argv[index];
     const next = argv[index + 1];
 
-    if (arg === "--dry-run") {
+    if (arg === "--check-config") {
+      args.checkConfig = true;
+    } else if (arg === "--dry-run") {
       args.dryRun = true;
     } else if (arg === "--strict-output") {
       args.strictOutput = true;

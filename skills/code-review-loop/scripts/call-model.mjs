@@ -60,33 +60,37 @@ export async function loadEnvFile(root, fileName = ".env") {
 
 export function resolveProviderOptions(options = {}, providersConfig = loadFallbackProvidersConfig()) {
   const usePrimaryEnv = options.usePrimaryEnv !== false;
-  const explicitLocalCli = options.localCli;
-  const explicitCliCommand = options.cliCommand;
-  const envLocalCli = usePrimaryEnv ? process.env.AI_REVIEW_LOCAL_CLI : undefined;
-  const envCliCommand = usePrimaryEnv ? process.env.AI_REVIEW_CLI_COMMAND : undefined;
+  const explicitLocalCli = configuredValue(options.localCli);
+  const explicitCliCommand = configuredValue(options.cliCommand);
+  const envLocalCli = usePrimaryEnv ? configuredValue(process.env.AI_REVIEW_LOCAL_CLI) : undefined;
+  const envCliCommand = usePrimaryEnv ? configuredValue(process.env.AI_REVIEW_CLI_COMMAND) : undefined;
   const requestedLocalCli =
     explicitLocalCli ||
     envLocalCli;
-  const requestedCliCommand =
-    explicitCliCommand ||
-    envCliCommand;
-  const requestedModel = options.model || (usePrimaryEnv ? process.env.AI_REVIEW_PRIMARY_MODEL : undefined);
-  const envProvider = usePrimaryEnv ? process.env.AI_REVIEW_PRIMARY_PROVIDER : undefined;
+  const requestedModel = configuredValue(options.model) || (usePrimaryEnv ? configuredValue(process.env.AI_REVIEW_PRIMARY_MODEL) : undefined);
+  const envProvider = usePrimaryEnv ? configuredValue(process.env.AI_REVIEW_PRIMARY_PROVIDER) : undefined;
   const providerName =
     (explicitLocalCli ? "local-cli" : undefined) ||
     (explicitCliCommand ? "cli" : undefined) ||
-    options.provider ||
+    configuredValue(options.provider) ||
     (envLocalCli ? "local-cli" : undefined) ||
     envProvider ||
     (envCliCommand ? "cli" : undefined) ||
-    inferProviderFromModel(requestedModel, providersConfig) ||
-    providersConfig.defaultProvider ||
-    "deepseek";
+    inferProviderFromModel(requestedModel, providersConfig);
+  if (!providerName) {
+    if (requestedModel) {
+      throw new Error(`No provider configured for model "${requestedModel}". Set --provider or AI_REVIEW_PRIMARY_PROVIDER.`);
+    }
+    throw new Error(
+      "No primary reviewer configured. Set --provider/AI_REVIEW_PRIMARY_PROVIDER, --local-cli/AI_REVIEW_LOCAL_CLI, or --cli-command/AI_REVIEW_CLI_COMMAND.",
+    );
+  }
   const provider = resolveProvider(providerName, providersConfig);
   const providerConfig = provider.config;
+  const requiresExplicitOpenAICompatibleConfig = provider.name === "openai-compatible";
   const model =
     requestedModel ||
-    providerConfig.model;
+    (requiresExplicitOpenAICompatibleConfig ? undefined : providerConfig.model);
   const apiStyle =
     options.apiStyle ||
     (usePrimaryEnv ? process.env.AI_REVIEW_API_STYLE : undefined) ||
@@ -106,16 +110,19 @@ export function resolveProviderOptions(options = {}, providersConfig = loadFallb
     (usePrimaryEnv ? process.env.AI_REVIEW_TRANSPORT : undefined) ||
     providerConfig.transport ||
     (apiStyle === "responses" ? "responses" : "openai-compatible");
+  const explicitBaseUrl =
+    configuredValue(options.baseUrl) ||
+    (usePrimaryEnv ? configuredValue(process.env.AI_REVIEW_PRIMARY_BASE_URL) : undefined);
   const baseUrl =
-    options.baseUrl ||
-    (usePrimaryEnv ? process.env.AI_REVIEW_PRIMARY_BASE_URL : undefined) ||
-    firstEnvValue(providerScopedEnvNames(providerConfig.baseUrlEnv)) ||
-    providerConfig.baseUrl;
+    explicitBaseUrl ||
+    (requiresExplicitOpenAICompatibleConfig
+      ? undefined
+      : configuredValue(firstEnvValue(providerScopedEnvNames(providerConfig.baseUrlEnv))) || providerConfig.baseUrl);
   const envCliCommandApplies = !envProvider || providerConfig.transport === "cli";
   const cliCommand =
     explicitCliCommand ||
     (envCliCommandApplies ? envCliCommand : undefined) ||
-    firstEnvValue(providerScopedEnvNames(providerConfig.commandEnv)) ||
+    configuredValue(firstEnvValue(providerScopedEnvNames(providerConfig.commandEnv))) ||
     providerConfig.command;
   const localCli = normalizeLocalCliName(
     requestedLocalCli ||
@@ -128,10 +135,14 @@ export function resolveProviderOptions(options = {}, providersConfig = loadFallb
     firstEnvValue(providerScopedEnvNames(providerConfig.localCliArgsEnv)) ||
     providerConfig.localCliArgs ||
     "";
+  const explicitApiKey =
+    configuredValue(options.apiKey) ||
+    (usePrimaryEnv ? configuredValue(process.env.AI_REVIEW_PRIMARY_API_KEY) : undefined);
   const apiKey =
-    options.apiKey ||
-    (usePrimaryEnv ? process.env.AI_REVIEW_PRIMARY_API_KEY : undefined) ||
-    firstEnvValue(providerScopedEnvNames(providerConfig.apiKeyEnv));
+    explicitApiKey ||
+    (requiresExplicitOpenAICompatibleConfig
+      ? undefined
+      : configuredValue(firstEnvValue(providerScopedEnvNames(providerConfig.apiKeyEnv))));
   const timeoutMs = positiveNumber(
     options.timeoutMs,
     process.env.AI_REVIEW_TIMEOUT_MS,
@@ -156,10 +167,6 @@ export function resolveProviderOptions(options = {}, providersConfig = loadFallb
     providerConfig.retryDelayMs,
     DEFAULT_RETRY_DELAY_MS,
   );
-
-  if (transport !== "cli" && !baseUrl) {
-    throw new Error(`Missing base URL for provider "${provider.name}".`);
-  }
 
   return {
     provider: provider.name,
@@ -189,6 +196,26 @@ export function resolveProviderOptions(options = {}, providersConfig = loadFallb
   };
 }
 
+export function assertUsableProviderConfig(providerOptions) {
+  if (providerOptions.transport === "cli") {
+    if (providerOptions.cliCommand) return;
+    if (!providerOptions.localCli) {
+      throw new Error(`Missing CLI command for provider "${providerOptions.provider}".`);
+    }
+    buildLocalCliInvocation(providerOptions.localCli, providerOptions.localCliArgs);
+    return;
+  }
+  if (!providerOptions.model) {
+    throw new Error(`Missing model for provider "${providerOptions.provider}".`);
+  }
+  if (!providerOptions.baseUrl) {
+    throw new Error(`Missing base URL for provider "${providerOptions.provider}".`);
+  }
+  if (!providerOptions.apiKey) {
+    throw new Error(`Missing API key for provider "${providerOptions.provider}".`);
+  }
+}
+
 function providerScopedEnvNames(names = []) {
   return names.filter((name) => !name.startsWith("AI_REVIEW_"));
 }
@@ -214,12 +241,9 @@ function inferProviderFromModel(model, providersConfig) {
 
 export async function callReviewModel({ brief, systemPrompt, schema, options, providersConfig }) {
   const providerOptions = resolveProviderOptions(options, providersConfig || await loadProvidersConfig());
+  assertUsableProviderConfig(providerOptions);
   if (providerOptions.transport === "cli") {
     return callCliReviewer({ brief, systemPrompt, schema, providerOptions });
-  }
-
-  if (!providerOptions.apiKey) {
-    throw new Error(`Missing API key for provider "${providerOptions.provider}". See references/provider-config.md.`);
   }
 
   if (providerOptions.transport === "responses" || providerOptions.apiStyle === "responses") {
@@ -736,7 +760,7 @@ function reviewErrorCategory({ error, message, status, source, code }) {
   if (status === 401 || status === 403) return "auth";
   if (status === 429) return "rate_limit";
   if (typeof status === "number" && status >= 500) return "server";
-  if (/missing api key|missing base url|unknown provider|missing cli command|command was not found|unsupported local cli preset/.test(normalized)) return "config";
+  if (/no primary reviewer configured|no provider configured for model|missing model|missing api key|missing base url|unknown provider|missing cli command|command was not found|unsupported local cli preset/.test(normalized)) return "config";
   if (/reviewer response did not contain valid json|reviewer returned an empty response|schema errors?/.test(normalized)) return "bad_response";
   if (source === "cli" || /cli reviewer/.test(normalized)) return "cli";
   if (
@@ -793,7 +817,6 @@ async function loadProvidersConfig() {
 
 function loadFallbackProvidersConfig() {
   return {
-    defaultProvider: "deepseek",
     providers: {
       deepseek: {
         model: "deepseek-v4-pro",
@@ -820,6 +843,20 @@ function resolveProvider(providerName, providersConfig) {
   }
 
   throw new Error(`Unknown provider "${providerName}". Add it to references/model-providers.json.`);
+}
+
+function configuredValue(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized || isPlaceholderValue(normalized)) return undefined;
+  return normalized;
+}
+
+function isPlaceholderValue(value) {
+  if (/^<[^<>]+>$/.test(value)) return true;
+  if (/^\[(?:redacted|[^\]]*(?:placeholder|example|your|replace|api[-_ ]?key|base[-_ ]?url|model)[^\]]*)\]$/i.test(value)) {
+    return true;
+  }
+  return /^(?:redacted|change[-_ ]?me|replace[-_ ]?me|your[-_ ].+|replace[-_ ].+)$/i.test(value);
 }
 
 function normalizeLocalCliName(value) {

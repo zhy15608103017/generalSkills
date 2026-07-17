@@ -13,7 +13,6 @@ import {
 import { parseArgs } from "../skills/code-review-loop/scripts/collect-context.mjs";
 
 const providersConfig = {
-  defaultProvider: "primary",
   providers: {
     primary: {
       model: "primary-model",

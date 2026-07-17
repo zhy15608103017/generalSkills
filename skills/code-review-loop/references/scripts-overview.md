@@ -6,7 +6,7 @@
 
 | 脚本 | 职责 |
 |---|---|
-| `ai-review.mjs` | 主入口。编排需求理解闸门、代码审查、自动分片、第二审查员、验证门禁、轮次状态与历史记录。 |
+| `ai-review.mjs` | 主入口。先预检 reviewer 配置，再编排需求理解闸门、代码审查、自动分片、第二审查员、验证门禁、轮次状态与历史记录。 |
 | `write-review-context.mjs` | 写入自包含的 `.ai-review/review-context/current-request.md`，支持结构化字段与 `--from-file`。 |
 | `check-syntax.mjs` | 对本 skill 内全部 `.mjs` 做语法检查；修改脚本后建议运行。 |
 | `benchmark-review.mjs` | 审查基准测试，用于对比模型或配置的审查质量。 |

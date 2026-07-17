@@ -11,6 +11,7 @@ import {
   resolveReviewLimits,
 } from "./collect-context.mjs";
 import {
+  assertUsableProviderConfig,
   callReviewModel,
   classifyReviewError,
   isBlockingFinding,
@@ -75,6 +76,57 @@ async function main() {
     return;
   }
 
+  const environmentBeforePreflight = { ...process.env };
+  let assets = null;
+  let primaryResolved = null;
+
+  if (options.checkConfig || !options.dryRun) {
+    await loadEnvFile(root);
+    assets = await loadReviewerAssets();
+    try {
+      primaryResolved = resolveProviderOptions(options, assets.providersConfig);
+      assertUsableProviderConfig(primaryResolved);
+    } catch (error) {
+      const fallbackResolved = primaryResolved || fallbackPrimaryReviewer(options);
+      if (options.checkConfig) {
+        await statusReporter.complete({
+          phase: "complete",
+          message: "主审模型配置预检未通过。",
+          verdict: "needs_human",
+        });
+        process.stderr.write(renderConfigCheckFailure(error));
+        process.exitCode = 3;
+        return;
+      }
+
+      const result = providerResolutionFailureResult(error, fallbackResolved);
+      const brief = renderProviderSetupBrief(error, fallbackResolved);
+      await clearLatestRequirementAuditArtifacts(outDir);
+      await fs.writeFile(path.join(outDir, "latest-brief.md"), brief, "utf8");
+      await writeLatestOutputs(outDir, result, brief);
+      await statusReporter.complete({
+        phase: "complete",
+        message: "主审审核能力未就绪，未进入 AI 审核流程。",
+        verdict: result.verdict,
+      });
+      process.stdout.write(renderConsoleSummary(result, outDir));
+      process.exitCode = 3;
+      return;
+    }
+
+    if (options.checkConfig) {
+      await statusReporter.complete({
+        phase: "complete",
+        message: "主审模型配置预检通过。",
+        verdict: "pass",
+      });
+      process.stdout.write(renderConfigCheckSuccess(primaryResolved));
+      return;
+    }
+
+    restoreProcessEnvironment(environmentBeforePreflight);
+  }
+
   if (!options.dryRun) {
     await assertRequestContext(root, options);
   }
@@ -100,7 +152,7 @@ async function main() {
   }
 
   if (options.dryRun) {
-    const assets = await loadReviewerAssets();
+    assets = assets || await loadReviewerAssets();
     let providerOptions = { provider: "unconfigured", model: "unconfigured" };
     try {
       providerOptions = resolveProviderOptions(options, assets.providersConfig);
@@ -129,28 +181,6 @@ async function main() {
     return;
   }
 
-  const assets = await loadReviewerAssets();
-  let primaryResolved;
-  try {
-    primaryResolved = resolveProviderOptions(options, assets.providersConfig);
-  } catch (error) {
-    const fallbackResolved = fallbackPrimaryReviewer(options);
-    const result = applyVerificationGate(
-      providerResolutionFailureResult(error, fallbackResolved),
-      context.verification,
-    );
-    await writeRequirementAuditArtifacts(outDir, result, renderRequirementAuditBrief(context));
-    const outputMeta = await writeOutputs(outDir, result, brief, options);
-    await appendHistory(outDir, result, options, context, { primary: fallbackResolved, second: null }, outputMeta);
-    await statusReporter.complete({
-      phase: "complete",
-      message: "主审模型配置解析失败。",
-      verdict: result.verdict,
-    });
-    process.stdout.write(renderConsoleSummary(result, outDir));
-    process.exitCode = result.verdict === "fail" ? 2 : 3;
-    return;
-  }
   const secondReviewSetup = resolveSecondReviewSetup(options, assets.providersConfig);
   const secondResolved = secondReviewSetup.resolved;
   const requirementAudit = await runRequirementAudit({
@@ -656,6 +686,13 @@ async function clearShardBriefArtifacts(outDir) {
   await fs.rm(path.join(outDir, "shards"), { recursive: true, force: true });
 }
 
+async function clearLatestRequirementAuditArtifacts(outDir) {
+  await Promise.all([
+    fs.rm(path.join(outDir, "latest-requirement-audit-result.json"), { force: true }),
+    fs.rm(path.join(outDir, "latest-requirement-audit-brief.md"), { force: true }),
+  ]);
+}
+
 const CLEANABLE_REVIEW_ENTRIES = [
   "cache",
   "shards",
@@ -1097,13 +1134,17 @@ function singleReviewerFailureRun(outcome, primaryResolved) {
 function providerResolutionFailureResult(error, fallbackResolved) {
   return {
     verdict: "needs_human",
-    summary: "主审模型配置解析失败，未能启动需求理解审核或代码审核，需要人工确认。",
+    summary: "主审审核能力未就绪，未进入需求理解审核或代码审核。",
     blocking_findings: [],
     warnings: [],
-    verification_notes: [`主审模型配置解析失败: ${errorMessage(error)}`],
+    verification_notes: [
+      `主审模型配置预检失败: ${errorMessage(error)}`,
+      "请配置 API provider/model/key，或显式配置受支持的本地 AI CLI reviewer。",
+      "优先使用宿主中已显式授权且能够独立返回审核结论的能力；若不存在，则执行确定性本地验证和当前 agent 自查。任何降级检查都不能视为本工具审核通过。",
+    ],
     reviewer_failures: [
       buildReviewerFailure({
-        phase: "requirement_audit",
+        phase: "preflight",
         reviewer: "primary",
         resolved: fallbackResolved,
         error,
@@ -1270,6 +1311,39 @@ export function buildSecondReviewOptions(options, providersConfig) {
   };
 }
 
+function renderProviderSetupBrief(error, resolved) {
+  return [
+    "# AI 审核配置预检",
+    "",
+    "正式审核尚未开始。当前运行未执行需求理解审核、代码审核或审核轮次计数。",
+    "",
+    `- Provider: ${renderText(resolved?.provider, "unknown")}`,
+    `- Model: ${renderText(resolved?.model, "unknown")}`,
+    `- 结果: ${errorMessage(error)}`,
+    "- 后续: 配置 API reviewer，或显式配置 local-cli/claude/codex/opencode reviewer 后重试。",
+    "- 降级: 可使用宿主中已显式授权的独立审核能力；若不存在，则执行确定性本地验证和当前 agent 自查，并明确本工具审核未运行。",
+    "",
+  ].join("\n");
+}
+
+function renderConfigCheckSuccess(resolved) {
+  return [
+    "AI 审核配置预检: 可进入正式审核流程",
+    `Provider/Model: ${resolved.provider}/${resolved.model}`,
+    `Transport: ${resolved.transport}`,
+    "",
+  ].join("\n");
+}
+
+function renderConfigCheckFailure(error) {
+  return [
+    "AI 审核配置预检失败，未进入正式审核流程。",
+    `原因: ${errorMessage(error)}`,
+    "请配置 API provider/model/key，或显式配置受支持的本地 AI CLI reviewer。",
+    "",
+  ].join("\n");
+}
+
 export function resolveSecondReviewOptions(options, providersConfig) {
   return resolveSecondReviewSetup(options, providersConfig).options;
 }
@@ -1327,21 +1401,6 @@ function isSecondReviewerConfigured(config) {
     config.localCli ||
     config.cliCommand
   );
-}
-
-function assertUsableProviderConfig(providerOptions) {
-  if (providerOptions.transport === "cli") {
-    if (!providerOptions.cliCommand && !providerOptions.localCli) {
-      throw new Error(`Missing CLI command for provider "${providerOptions.provider}".`);
-    }
-    return;
-  }
-  if (!providerOptions.baseUrl) {
-    throw new Error(`Missing base URL for provider "${providerOptions.provider}".`);
-  }
-  if (!providerOptions.apiKey) {
-    throw new Error(`Missing API key for provider "${providerOptions.provider}".`);
-  }
 }
 
 function secondReviewerCliProvider(config, options = {}) {
@@ -1450,6 +1509,15 @@ function normalizeSecondReviewMode(value) {
 function readEnv(name) {
   const value = process.env[name];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function restoreProcessEnvironment(snapshot) {
+  for (const name of Object.keys(process.env)) {
+    if (!(name in snapshot)) {
+      delete process.env[name];
+    }
+  }
+  Object.assign(process.env, snapshot);
 }
 
 function runWithOptionalStatus(statusReporter, status, callback) {
@@ -1703,18 +1771,13 @@ function renderText(value, fallback) {
 }
 
 async function writeOutputs(outDir, result, brief, options = {}) {
-  const outputResult = withDisplayFields(result);
-  const report = renderMarkdownReport(outputResult);
-  const latestResultPath = path.join(outDir, "latest-result.json");
-  const latestReportPath = path.join(outDir, "latest-report.md");
-  const latestBriefPath = path.join(outDir, "latest-brief.md");
+  const latestOutput = await writeLatestOutputs(outDir, result, brief);
+  const { outputResult, report, latestResultPath, latestReportPath, latestBriefPath } = latestOutput;
   const { runId, runDir } = await reserveRunDirectory(outDir, formatReviewRunId(new Date(), options));
   const runResultPath = path.join(runDir, "result.json");
   const runReportPath = path.join(runDir, "report.md");
   const runBriefPath = path.join(runDir, "brief.md");
 
-  await fs.writeFile(latestResultPath, `${JSON.stringify(outputResult, null, 2)}\n`, "utf8");
-  await fs.writeFile(latestReportPath, report, "utf8");
   await fs.writeFile(runResultPath, `${JSON.stringify(outputResult, null, 2)}\n`, "utf8");
   await fs.writeFile(runReportPath, report, "utf8");
   await fs.writeFile(runBriefPath, brief || "", "utf8");
@@ -1727,6 +1790,26 @@ async function writeOutputs(outDir, result, brief, options = {}) {
     runResultPath,
     runReportPath,
     runBriefPath,
+  };
+}
+
+async function writeLatestOutputs(outDir, result, brief) {
+  const outputResult = withDisplayFields(result);
+  const report = renderMarkdownReport(outputResult);
+  const latestResultPath = path.join(outDir, "latest-result.json");
+  const latestReportPath = path.join(outDir, "latest-report.md");
+  const latestBriefPath = path.join(outDir, "latest-brief.md");
+
+  await fs.writeFile(latestResultPath, `${JSON.stringify(outputResult, null, 2)}\n`, "utf8");
+  await fs.writeFile(latestReportPath, report, "utf8");
+  await fs.writeFile(latestBriefPath, brief || "", "utf8");
+
+  return {
+    outputResult,
+    report,
+    latestResultPath,
+    latestReportPath,
+    latestBriefPath,
   };
 }
 

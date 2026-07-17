@@ -43,6 +43,10 @@ provider 定义里只应包含 provider 级别的环境变量，例如 `OPENAI_A
 
 `PRIMARY` 会先执行。只有当二审路由配置存在、可解析到可用凭证，并且 `AI_REVIEW_SECOND_REVIEW_MODE` 允许时，才会运行 `SECOND`。`AI_REVIEW_SECOND_API_KEY` 只提供凭证，不会单独开启二审。
 
+正式审核前可运行 `ai-review.mjs --check-config`。主审 API 缺少 key/base URL，或 CLI reviewer 缺少显式 preset/command 时，预检以退出码 `3` 结束，不进入需求审计和代码审查。工具不会自动选择本机已安装的 AI CLI；要使用 `codex`、`claude` 或 `opencode`，请显式配置 provider 或 `--local-cli`。
+
+本 skill 没有全局默认 provider。必须显式选择 `deepseek`、`openai`、`openai-compatible`、本地 CLI 或其他已登记 provider，或者提供与已登记 provider 精确匹配的显式模型名。provider 专属 API key 只作为已选 provider 的凭证回退，单独设置 key 不会触发 provider 选择。通用的 `openai-compatible` provider 不接受 provider 定义中的默认 model、base URL 或 provider 专属凭证，这三项都必须由用户通过运行时主审/二审配置显式提供。
+
 provider 专属 key 回退来源配置在 `model-providers.json` 中。当前内置 provider 包括：
 
 ```text
@@ -108,6 +112,7 @@ AI_REVIEW_THINKING_TYPE=enabled
 ## 常用 flags
 
 ```text
+--check-config
 --provider <name>
 --model <model>
 --transport responses|openai-compatible|cli
@@ -163,9 +168,9 @@ AI_REVIEW_THINKING_TYPE=enabled
 --clean
 ```
 
-## 推荐默认值
+## 推荐配置示例
 
 - 低成本首轮审查：`deepseek-v4-pro` 或其他更快的兼容模型。
 - 高风险第二轮审查：通过 `provider=openai` 使用 OpenAI 推理模型。
-- 默认优先使用 API transport。只有在本地工具、企业登录流，或模型无法稳定通过 API 获取时，才使用 CLI transport。
+- 一般优先使用 API transport。只有在本地工具、企业登录流，或模型无法稳定通过 API 获取时，才使用 CLI transport。
 - 本地开发阶段，建议在一个功能切片完成后手动运行，而不是每次保存文件都触发。

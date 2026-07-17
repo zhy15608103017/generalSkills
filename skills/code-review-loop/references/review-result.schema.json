@@ -131,7 +131,7 @@
       "properties": {
         "phase": {
           "type": "string",
-          "enum": ["requirement_audit", "code_review", "unknown"]
+          "enum": ["preflight", "requirement_audit", "code_review", "unknown"]
         },
         "reviewer": {
           "type": "string",

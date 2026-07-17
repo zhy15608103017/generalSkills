@@ -7,12 +7,14 @@ import {
   runReviewPasses,
   shouldRunSecondReview,
 } from "../skills/code-review-loop/scripts/ai-review.mjs";
-import { resolveProviderOptions } from "../skills/code-review-loop/scripts/call-model.mjs";
+import {
+  assertUsableProviderConfig,
+  resolveProviderOptions,
+} from "../skills/code-review-loop/scripts/call-model.mjs";
 import { parseArgs, renderReviewBrief } from "../skills/code-review-loop/scripts/collect-context.mjs";
 import { renderReviewLimitValue } from "../skills/code-review-loop/scripts/review-limits.mjs";
 
 const providersConfig = {
-  defaultProvider: "primary",
   providers: {
     primary: {
       model: "primary-model",
@@ -30,7 +32,6 @@ const providersConfig = {
 };
 
 const providerBudgetConfig = {
-  defaultProvider: "cli",
   providers: {
     cli: {
       model: "cli-reviewer",
@@ -102,6 +103,10 @@ test("parseArgs accepts second-review timeout, retry, and confidence threshold o
   assert.equal(args.secondConfidenceThreshold, 0.7);
 });
 
+test("parseArgs accepts reviewer configuration preflight", () => {
+  assert.equal(parseArgs(["--check-config"]).checkConfig, true);
+});
+
 test("parseArgs accepts local CLI preset options", () => {
   const args = parseArgs([
     "--local-cli",
@@ -131,6 +136,154 @@ test("resolveProviderOptions validates reviewer output strictly by default", () 
 
   assert.equal(defaultOptions.strictOutput, true);
   assert.equal(relaxedOptions.strictOutput, false);
+});
+
+test("resolveProviderOptions ignores a legacy default provider and requires an explicit reviewer", () => {
+  assert.throws(
+    () => resolveProviderOptions({ usePrimaryEnv: false }, {
+      defaultProvider: "deepseek",
+      providers: {
+        deepseek: {
+          model: "deepseek-model",
+          baseUrl: "https://deepseek.example/v1",
+          transport: "openai-compatible",
+        },
+      },
+    }),
+    /No primary reviewer configured/,
+  );
+});
+
+test("resolveProviderOptions requires an explicit provider for an unknown model", () => {
+  assert.throws(
+    () => resolveProviderOptions({ usePrimaryEnv: false, model: "custom-unmapped-model" }, {
+      providers: {
+        deepseek: {
+          model: "deepseek-model",
+          baseUrl: "https://deepseek.example/v1",
+          transport: "openai-compatible",
+        },
+      },
+    }),
+    /No provider configured for model "custom-unmapped-model"/,
+  );
+});
+
+test("CLI reviewer configuration does not require a model", () => {
+  const resolved = resolveProviderOptions({
+    usePrimaryEnv: false,
+    provider: "cli",
+    cliCommand: "trusted-reviewer --json",
+  }, {
+    providers: {
+      cli: {
+        transport: "cli",
+      },
+    },
+  });
+
+  assert.equal(resolved.model, undefined);
+  assert.doesNotThrow(() => assertUsableProviderConfig(resolved));
+});
+
+test("CLI reviewer configuration rejects unsupported local presets during preflight", () => {
+  const resolved = resolveProviderOptions({
+    usePrimaryEnv: false,
+    localCli: "unknown-reviewer",
+  }, {
+    providers: {
+      "local-cli": {
+        transport: "cli",
+      },
+    },
+  });
+
+  assert.throws(
+    () => assertUsableProviderConfig(resolved),
+    /Unsupported local CLI preset "unknown-reviewer"/,
+  );
+});
+
+test("API reviewer configuration still requires a model", () => {
+  const resolved = resolveProviderOptions({
+    usePrimaryEnv: false,
+    provider: "custom-api",
+    baseUrl: "https://review.example/v1",
+    apiKey: "test-key",
+  }, {
+    providers: {
+      "custom-api": {
+        transport: "openai-compatible",
+      },
+    },
+  });
+
+  assert.throws(() => assertUsableProviderConfig(resolved), /Missing model/);
+});
+
+test("API reviewer configuration treats common placeholder credentials as missing", () => {
+  const resolved = resolveProviderOptions({
+    usePrimaryEnv: false,
+    provider: "custom-api",
+    model: "custom-model",
+    baseUrl: "https://review.example/v1",
+    apiKey: "[REDACTED]",
+  }, {
+    providers: {
+      "custom-api": {
+        transport: "openai-compatible",
+      },
+    },
+  });
+
+  assert.equal(resolved.apiKey, undefined);
+  assert.throws(() => assertUsableProviderConfig(resolved), /Missing API key/);
+});
+
+test("openai-compatible ignores legacy provider defaults and provider-scoped credentials", () => {
+  const previousApiKey = process.env.LEGACY_GENERIC_API_KEY;
+  process.env.LEGACY_GENERIC_API_KEY = "legacy-provider-key";
+
+  try {
+    const config = {
+      providers: {
+        "openai-compatible": {
+          model: "legacy-model",
+          baseUrl: "https://legacy.example/v1",
+          apiKeyEnv: ["LEGACY_GENERIC_API_KEY"],
+          transport: "openai-compatible",
+        },
+      },
+    };
+    const unresolved = resolveProviderOptions({
+      usePrimaryEnv: false,
+      provider: "openai-compatible",
+    }, config);
+
+    assert.equal(unresolved.model, undefined);
+    assert.equal(unresolved.baseUrl, "");
+    assert.equal(unresolved.apiKey, undefined);
+    assert.throws(() => assertUsableProviderConfig(unresolved), /Missing model/);
+
+    const resolved = resolveProviderOptions({
+      usePrimaryEnv: false,
+      provider: "openai-compatible",
+      model: "explicit-model",
+      baseUrl: "https://review.example/v1",
+      apiKey: "explicit-key",
+    }, config);
+
+    assert.equal(resolved.model, "explicit-model");
+    assert.equal(resolved.baseUrl, "https://review.example/v1");
+    assert.equal(resolved.apiKey, "explicit-key");
+    assert.doesNotThrow(() => assertUsableProviderConfig(resolved));
+  } finally {
+    if (previousApiKey === undefined) {
+      delete process.env.LEGACY_GENERIC_API_KEY;
+    } else {
+      process.env.LEGACY_GENERIC_API_KEY = previousApiKey;
+    }
+  }
 });
 
 test("parseArgs accepts configurable review rounds and retry timing options", () => {
@@ -214,7 +367,6 @@ test("resolveProviderOptions can infer local-cli provider from primary local CLI
 
   try {
     const resolved = resolveProviderOptions({}, {
-      defaultProvider: "primary",
       providers: {
         primary: {
           model: "primary-model",
@@ -258,7 +410,6 @@ test("resolveProviderOptions can infer local-cli provider from primary local CLI
 
 test("resolveProviderOptions maps built-in CLI provider aliases to local presets", () => {
   const resolved = resolveProviderOptions({ provider: "claude" }, {
-    defaultProvider: "primary",
     providers: {
       primary: {
         model: "primary-model",
@@ -289,7 +440,6 @@ test("resolveProviderOptions lets legacy CLI command override env CLI provider p
 
   try {
     const resolved = resolveProviderOptions({}, {
-      defaultProvider: "openai-compatible",
       providers: {
         "openai-compatible": {
           model: "api-reviewer",
@@ -342,7 +492,6 @@ test("resolveProviderOptions does not let legacy CLI command override env API pr
 
   try {
     const resolved = resolveProviderOptions({}, {
-      defaultProvider: "openai-compatible",
       providers: {
         "openai-compatible": {
           model: "api-reviewer",
@@ -386,7 +535,6 @@ test("resolveProviderOptions still uses legacy CLI command when env provider is 
 
   try {
     const resolved = resolveProviderOptions({}, {
-      defaultProvider: "openai-compatible",
       providers: {
         "openai-compatible": {
           model: "api-reviewer",
@@ -504,7 +652,6 @@ test("buildSecondReviewOptions routes second local CLI without extra provider fl
 
 test("second local CLI provider aliases do not inherit primary API routing options", () => {
   const config = {
-    defaultProvider: "openai-compatible",
     providers: {
       "openai-compatible": {
         model: "api-model",

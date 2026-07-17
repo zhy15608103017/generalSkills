@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -31,6 +31,36 @@ import { renderMarkdownReport } from "../skills/code-review-loop/scripts/review-
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function envWithoutReviewConfig(overrides = {}) {
+  const env = { ...process.env };
+  for (const name of [
+    "AI_REVIEW_PRIMARY_PROVIDER",
+    "AI_REVIEW_PRIMARY_MODEL",
+    "AI_REVIEW_PRIMARY_BASE_URL",
+    "AI_REVIEW_PRIMARY_API_KEY",
+    "AI_REVIEW_TRANSPORT",
+    "AI_REVIEW_API_STYLE",
+    "AI_REVIEW_LOCAL_CLI",
+    "AI_REVIEW_LOCAL_CLI_ARGS",
+    "AI_REVIEW_CLI_COMMAND",
+    "DEEPSEEK_API_KEY",
+    "OPENAI_API_KEY",
+    "MIMO_API_KEY",
+    "XIAOMI_API_KEY",
+    "ZAI_API_KEY",
+    "ZHIPU_API_KEY",
+    "BIGMODEL_API_KEY",
+  ]) {
+    delete env[name];
+  }
+  for (const name of Object.keys(env)) {
+    if (name.startsWith("AI_REVIEW_SECOND_")) {
+      delete env[name];
+    }
+  }
+  return { ...env, ...overrides };
+}
 
 function passResult(overrides = {}) {
   return {
@@ -78,7 +108,6 @@ function secondReviewerOptions(extraArgs = []) {
 }
 
 const providersConfig = {
-  defaultProvider: "primary",
   providers: {
     primary: {
       model: "primary-model",
@@ -446,6 +475,9 @@ test("classifyReviewError categorizes common model invocation failures", async (
 
   const config = new Error("Missing API key for provider");
   assert.equal(classifyReviewError(config).category, "config");
+
+  const unconfigured = new Error("No primary reviewer configured");
+  assert.equal(classifyReviewError(unconfigured).category, "config");
 
   const badResponse = new Error("Reviewer response did not contain valid JSON.");
   assert.equal(classifyReviewError(badResponse).category, "bad_response");
@@ -882,6 +914,228 @@ test("ai-review writes structured failure output when primary provider config is
   }
 });
 
+test("ai-review skips the formal review flow when the primary reviewer is not configured", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-unconfigured-"));
+  try {
+    await execFileAsync("git", ["init"], { cwd: tempDir });
+    await mkdir(path.join(tempDir, ".ai-review"), { recursive: true });
+    await writeFile(
+      path.join(tempDir, ".ai-review", "latest-requirement-audit-result.json"),
+      "{\"verdict\":\"pass\"}\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(tempDir, ".ai-review", "latest-requirement-audit-brief.md"),
+      "# stale requirement audit\n",
+      "utf8",
+    );
+
+    const scriptPath = path.join(repoRoot, "skills", "code-review-loop", "scripts", "ai-review.mjs");
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [scriptPath, "--allow-empty"],
+      { cwd: tempDir, env: envWithoutReviewConfig(), windowsHide: true },
+    ).catch((error) => {
+      assert.equal(error.code, 3);
+      return error;
+    });
+
+    assert.match(stdout, /AI 审核结论/);
+    const result = JSON.parse(await readFile(path.join(tempDir, ".ai-review", "latest-result.json"), "utf8"));
+    const brief = await readFile(path.join(tempDir, ".ai-review", "latest-brief.md"), "utf8");
+    assert.equal(result.verdict, "needs_human");
+    assert.match(result.summary, /未进入需求理解审核或代码审核/);
+    assert.deepEqual(result.reviewer_failures.map((failure) => failure.phase), ["preflight"]);
+    assert.match(brief, /正式审核尚未开始/);
+    await assert.rejects(readFile(path.join(tempDir, ".ai-review", "history.jsonl"), "utf8"), /ENOENT/);
+    await assert.rejects(readFile(path.join(tempDir, ".ai-review", "latest-requirement-audit-result.json"), "utf8"), /ENOENT/);
+    await assert.rejects(readFile(path.join(tempDir, ".ai-review", "latest-requirement-audit-brief.md"), "utf8"), /ENOENT/);
+    await assert.rejects(stat(path.join(tempDir, ".ai-review", "runs")), /ENOENT/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("ai-review check-config validates reviewer setup without request context", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-check-config-"));
+  try {
+    await execFileAsync("git", ["init"], { cwd: tempDir });
+
+    const scriptPath = path.join(repoRoot, "skills", "code-review-loop", "scripts", "ai-review.mjs");
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [scriptPath, "--check-config", "--local-cli", "codex"],
+      { cwd: tempDir, env: envWithoutReviewConfig(), windowsHide: true },
+    );
+
+    assert.match(stdout, /配置预检: 可进入正式审核流程/);
+    assert.match(stdout, /local-cli\/local-cli-reviewer/);
+    await assert.rejects(readFile(path.join(tempDir, ".ai-review", "latest-result.json"), "utf8"), /ENOENT/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("ai-review does not infer a primary provider from a provider-specific API key", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-no-default-provider-"));
+  try {
+    await execFileAsync("git", ["init"], { cwd: tempDir });
+
+    const scriptPath = path.join(repoRoot, "skills", "code-review-loop", "scripts", "ai-review.mjs");
+    const { stderr } = await execFileAsync(
+      process.execPath,
+      [scriptPath, "--check-config"],
+      {
+        cwd: tempDir,
+        env: envWithoutReviewConfig({ DEEPSEEK_API_KEY: "provider-key-without-selection" }),
+        windowsHide: true,
+      },
+    ).catch((error) => {
+      assert.equal(error.code, 3);
+      return error;
+    });
+
+    assert.match(stderr, /No primary reviewer configured/);
+    assert.doesNotMatch(stderr, /Missing API key for provider "deepseek"/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("ai-review rejects unsupported local CLI presets during configuration preflight", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-invalid-local-cli-"));
+  try {
+    await execFileAsync("git", ["init"], { cwd: tempDir });
+
+    const scriptPath = path.join(repoRoot, "skills", "code-review-loop", "scripts", "ai-review.mjs");
+    const { stderr } = await execFileAsync(
+      process.execPath,
+      [scriptPath, "--check-config", "--local-cli", "unknown-reviewer"],
+      { cwd: tempDir, env: envWithoutReviewConfig(), windowsHide: true },
+    ).catch((error) => {
+      assert.equal(error.code, 3);
+      return error;
+    });
+
+    assert.match(stderr, /Unsupported local CLI preset "unknown-reviewer"/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("ai-review rejects placeholder API credentials during configuration preflight", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-placeholder-key-"));
+  try {
+    await execFileAsync("git", ["init"], { cwd: tempDir });
+    await writeFile(
+      path.join(tempDir, ".env"),
+      [
+        "AI_REVIEW_PRIMARY_PROVIDER=openai-compatible",
+        "AI_REVIEW_PRIMARY_MODEL=custom-model",
+        "AI_REVIEW_PRIMARY_BASE_URL=https://review.example/v1",
+        "AI_REVIEW_PRIMARY_API_KEY=[REDACTED]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const scriptPath = path.join(repoRoot, "skills", "code-review-loop", "scripts", "ai-review.mjs");
+    const { stderr } = await execFileAsync(
+      process.execPath,
+      [scriptPath, "--check-config"],
+      { cwd: tempDir, env: envWithoutReviewConfig(), windowsHide: true },
+    ).catch((error) => {
+      assert.equal(error.code, 3);
+      return error;
+    });
+
+    assert.match(stderr, /Missing API key for provider "openai-compatible"/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("ai-review preflight does not leak repository env values into verification commands", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-preflight-env-"));
+  try {
+    await execFileAsync("git", ["init"], { cwd: tempDir });
+    await mkdir(path.join(tempDir, ".ai-review", "review-context"), { recursive: true });
+    await writeFile(
+      path.join(tempDir, ".env"),
+      [
+        "AI_REVIEW_PRIMARY_API_KEY=must-not-reach-verification",
+        "AI_REVIEW_TEST_SENTINEL=must-not-reach-verification",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(tempDir, ".ai-review", "review-context", "current-request.md"),
+      [
+        "# 当前审核需求上下文",
+        "## 用户原始请求（原文）",
+        "test preflight environment isolation",
+        "## 用户后续纠正/澄清（原文）",
+        "无。",
+        "## 当前模型理解（待审核，不得当作事实）",
+        "verification commands must not inherit values loaded from repository .env for reviewer preflight",
+        "## 明确反例/非期望行为",
+        "verification sees AI_REVIEW_TEST_SENTINEL",
+        "## 验收标准",
+        "verification exits zero",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const reviewerScript = path.join(tempDir, "reviewer.mjs");
+    const verificationScript = path.join(tempDir, "verify-env.mjs");
+    await writeFile(
+      reviewerScript,
+      [
+        "process.stdin.resume();",
+        "process.stdin.on('end', () => {",
+        "  process.stdout.write(JSON.stringify({ verdict: 'pass', summary: 'ok', blocking_findings: [], warnings: [], verification_notes: [], confidence: 1 }));",
+        "});",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      verificationScript,
+      "process.exit(process.env.AI_REVIEW_PRIMARY_API_KEY || process.env.AI_REVIEW_TEST_SENTINEL ? 1 : 0);\n",
+      "utf8",
+    );
+
+    const quote = (value) => `"${String(value).replaceAll('"', '\\"')}"`;
+    const scriptPath = path.join(repoRoot, "skills", "code-review-loop", "scripts", "ai-review.mjs");
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        scriptPath,
+        "--allow-empty",
+        "--provider",
+        "cli",
+        "--cli-command",
+        `${quote(process.execPath)} ${quote(reviewerScript)}`,
+        "--second-review-mode",
+        "off",
+        "--verify",
+        `${quote(process.execPath)} ${quote(verificationScript)}`,
+      ],
+      { cwd: tempDir, env: envWithoutReviewConfig(), windowsHide: true },
+    );
+
+    assert.match(stdout, /AI 审核结论/);
+    const result = JSON.parse(await readFile(path.join(tempDir, ".ai-review", "latest-result.json"), "utf8"));
+    const brief = await readFile(path.join(tempDir, ".ai-review", "latest-brief.md"), "utf8");
+    assert.equal(result.verdict, "pass");
+    assert.match(brief, /退出码: 0/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("ai-review marks latest status failed when request context is missing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "code-review-loop-missing-context-"));
   try {
@@ -890,7 +1144,7 @@ test("ai-review marks latest status failed when request context is missing", asy
     const scriptPath = path.join(repoRoot, "skills", "code-review-loop", "scripts", "ai-review.mjs");
     await execFileAsync(
       process.execPath,
-      [scriptPath, "--allow-empty"],
+      [scriptPath, "--allow-empty", "--local-cli", "codex"],
       { cwd: tempDir, windowsHide: true },
     ).then(
       () => assert.fail("expected ai-review to fail without request context"),

@@ -5,6 +5,7 @@
 ## 目录
 
 - [配置来源优先级](#配置来源优先级)
+- [配置预检与降级](#配置预检与降级)
 - [最小配置](#最小配置)
 - [双模型配置](#双模型配置)
 - [主模型变量](#主模型变量)
@@ -38,7 +39,29 @@ shell 环境变量会覆盖 `.env`。`.env` 只会补充当前进程中尚未设
 审查模型配置 > provider 自身默认配置
 ```
 
-例如主模型或第二模型没有设置 `AI_REVIEW_PRIMARY_API_KEY` / `AI_REVIEW_SECOND_API_KEY` 时，会回退读取 provider 的 `apiKeyEnv`。例如 MiMo provider 会读取 `MIMO_API_KEY` 或 `XIAOMI_API_KEY`。模型名也可用于反查 provider；比如只设置 `AI_REVIEW_SECOND_MODEL=mimo-v2.5-pro` 时，脚本会优先匹配 `model-providers.json` 中 model 相同的 provider，再读取该 provider 的 key。
+例如主模型或第二模型没有设置 `AI_REVIEW_PRIMARY_API_KEY` / `AI_REVIEW_SECOND_API_KEY` 时，会回退读取已选 provider 的 `apiKeyEnv`。例如 MiMo provider 会读取 `MIMO_API_KEY` 或 `XIAOMI_API_KEY`。通用 `openai-compatible` 是例外：它的 model、base URL 和 API key 都必须通过运行时主审/二审配置显式提供，不读取 provider 定义中的默认值或 provider 专属凭证。模型名也可用于反查 provider；比如只设置 `AI_REVIEW_SECOND_MODEL=mimo-v2.5-pro` 时，脚本会优先匹配 `model-providers.json` 中 model 相同的 provider，再读取该 provider 的 key。
+
+本 skill 不设置全局默认 provider。必须显式设置 provider、本地 CLI、可信自定义命令，或提供与已登记 provider 精确匹配的显式模型名；仅存在 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY` 等 provider 专属凭证不会自动选择对应服务商。安装时写入 `.env` 的配置模板全部为注释示例，用户需要主动取消注释并填写真实值。
+
+## 配置预检与降级
+
+在准备正式审核上下文前运行：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --check-config
+```
+
+预检成功时退出码为 `0`，并打印解析后的 provider/model/transport。预检失败时退出码为 `3`，不会运行需求理解审计、代码审核或审核轮次。
+
+正式审核命令也会先执行相同预检。主审配置不可用时，脚本会以 `needs_human` 写入最新结果和报告，但不会生成需求审计产物、历史审核运行或轮次记录。此时优先使用宿主中已显式授权且能独立返回可核验结论的审核能力；若不存在，再执行确定性本地验证和当前 agent 自查。必须明确报告本工具的独立 AI reviewer 未运行，不能把任何降级检查当作 `code-review-loop pass`。
+
+本地 CLI reviewer 必须显式配置，例如：
+
+```bash
+node .agents/skills/code-review-loop/scripts/ai-review.mjs --check-config --local-cli codex
+```
+
+脚本不会自动探测并调用未配置的 `codex`、`claude` 或 `opencode`。
 
 ## 最小配置
 
@@ -381,7 +404,7 @@ AI_REVIEW_TRANSPORT=openai-compatible
 AI_REVIEW_API_STYLE=chat
 ```
 
-也可以使用 provider 专属 key：
+在已显式设置 `AI_REVIEW_PRIMARY_PROVIDER=deepseek` 时，也可以使用 provider 专属 key：
 
 ```env
 AI_REVIEW_PRIMARY_PROVIDER=deepseek
@@ -399,9 +422,10 @@ AI_REVIEW_TRANSPORT=responses
 AI_REVIEW_API_STYLE=responses
 ```
 
-也可以使用：
+在已显式设置 `AI_REVIEW_PRIMARY_PROVIDER=openai` 时，也可以使用 provider 专属 key：
 
 ```env
+AI_REVIEW_PRIMARY_PROVIDER=openai
 OPENAI_API_KEY=<key>
 ```
 

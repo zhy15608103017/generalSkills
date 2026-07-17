@@ -434,7 +434,7 @@ test("code-review-loop install hook preserves existing gitignore formatting", as
   });
 });
 
-test("code-review-loop install hook creates env template with placeholder keys", async () => {
+test("code-review-loop install hook creates a commented env configuration template", async () => {
   await withTempDir(async (destDir) => {
     await installSkills({
       repoDir: path.resolve("."),
@@ -444,12 +444,13 @@ test("code-review-loop install hook creates env template with placeholder keys",
     });
 
     const envText = await readFile(path.join(destDir, ".env"), "utf8");
-    assert.match(envText, /AI_REVIEW_PRIMARY_PROVIDER=openai-compatible/);
-    assert.match(envText, /AI_REVIEW_PRIMARY_BASE_URL=<primary-base-url>/);
-    assert.match(envText, /AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
-    assert.match(envText, /AI_REVIEW_STRICT_OUTPUT=true/);
-    assert.match(envText, /AI_REVIEW_SECOND_BASE_URL=<second-base-url>/);
-    assert.match(envText, /AI_REVIEW_SECOND_API_KEY=<second-api-key>/);
+    assert.match(envText, /# AI_REVIEW_PRIMARY_PROVIDER=openai-compatible/);
+    assert.match(envText, /# AI_REVIEW_PRIMARY_BASE_URL=<primary-base-url>/);
+    assert.match(envText, /# AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
+    assert.match(envText, /# AI_REVIEW_STRICT_OUTPUT=true/);
+    assert.match(envText, /# AI_REVIEW_SECOND_BASE_URL=<second-base-url>/);
+    assert.match(envText, /# AI_REVIEW_SECOND_API_KEY=<second-api-key>/);
+    assert.doesNotMatch(envText, /^AI_REVIEW_/m);
     assert.doesNotMatch(envText, /10\.28\.7\.30|dreamfield\.top|sk-[A-Za-z0-9_-]+/);
 
     await installSkills({
@@ -481,8 +482,8 @@ test("code-review-loop install hook appends env template to existing env", async
 
     const envText = await readFile(path.join(destDir, ".env"), "utf8");
     assert.match(envText, /^EXISTING_FLAG=true\n\n# gskills:code-review-loop env:start\n# 主审模型配置/m);
-    assert.match(envText, /AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
-    assert.match(envText, /AI_REVIEW_SECOND_API_KEY=<second-api-key>/);
+    assert.match(envText, /# AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
+    assert.match(envText, /# AI_REVIEW_SECOND_API_KEY=<second-api-key>/);
 
     await installSkills({
       repoDir: path.resolve("."),
@@ -528,8 +529,8 @@ test("code-review-loop install hook appends template when existing env only has 
     const envText = await readFile(path.join(destDir, ".env"), "utf8");
     assert.match(envText, /# gskills:code-review-loop env:start/);
     assert.match(envText, /# 主审模型配置/);
-    assert.match(envText, /AI_REVIEW_PRIMARY_BASE_URL=<primary-base-url>/);
-    assert.match(envText, /AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
+    assert.match(envText, /# AI_REVIEW_PRIMARY_BASE_URL=<primary-base-url>/);
+    assert.match(envText, /# AI_REVIEW_PRIMARY_API_KEY=<primary-api-key>/);
   });
 });
 
