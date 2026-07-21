@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 
 import {
   discoverStyle,
+  recordInferenceCache,
   renderSnapshotMarkdown
 } from "../skills/prototype-to-existing-ui/scripts/discover-style.mjs";
 import { installSkills } from "../scripts/install-skills.mjs";
@@ -177,6 +178,34 @@ test("CLI --no-write --json emits JSON without writing a file", async () => {
   });
 });
 
+test("CLI --record-inference records cache metadata without invoking a model", async () => {
+  await withTempDir(async (dir) => {
+    await seedProject(dir);
+    await mkdir(path.join(dir, ".ai-ui"), { recursive: true });
+    await writeFile(
+      path.join(dir, ".ai-ui", "inferred-reference.md"),
+      "# 推断 UI 参考\n\n> 机器推断，待人工确认。\n",
+      "utf8"
+    );
+
+    const result = await execFileAsync(process.execPath, [
+      scriptPath,
+      "--root",
+      dir,
+      "--record-inference"
+    ]);
+    assert.match(result.stdout, /机器推断缓存已记录/);
+
+    const metadata = JSON.parse(
+      await readFile(path.join(dir, ".ai-ui", "inference-meta.json"), "utf8")
+    );
+    assert.equal(metadata.schemaVersion, 1);
+    assert.equal(metadata.inferenceVersion, 1);
+    assert.match(metadata.inputFingerprint, /^sha256:/);
+    assert.match(metadata.staticSemanticFingerprint, /^sha256:/);
+  });
+});
+
 test("discoverStyle works without .ui-reference or package.json", async () => {
   await withTempDir(async (dir) => {
     await mkdir(path.join(dir, "src", "components"), { recursive: true });
@@ -194,6 +223,185 @@ test("discoverStyle works without .ui-reference or package.json", async () => {
     assert.equal(snapshot.packageJson.exists, false);
     assert.ok(snapshot.components.found.some((entry) => entry.name === "Card"));
     assert.equal(snapshot.sources, "代码库");
+  });
+});
+
+test("fingerprints separate source changes from UI semantic changes", async () => {
+  await withTempDir(async (dir) => {
+    await seedProject(dir);
+    const first = await discoverStyle({ root: dir });
+
+    await writeFile(
+      path.join(dir, "src", "components", "Button.tsx"),
+      "// implementation note\nexport const Button = () => null;",
+      "utf8"
+    );
+    const commentOnly = await discoverStyle({ root: dir });
+
+    assert.notEqual(commentOnly.fingerprints.input, first.fingerprints.input);
+    assert.equal(
+      commentOnly.fingerprints.staticSemantic,
+      first.fingerprints.staticSemantic
+    );
+
+    const originalConfig = await readFile(path.join(dir, "tailwind.config.js"), "utf8");
+    await writeFile(
+      path.join(dir, "tailwind.config.js"),
+      `// documentation only\n${originalConfig}`,
+      "utf8"
+    );
+    const configCommentOnly = await discoverStyle({ root: dir });
+    assert.notEqual(
+      configCommentOnly.fingerprints.input,
+      commentOnly.fingerprints.input
+    );
+    assert.equal(
+      configCommentOnly.fingerprints.staticSemantic,
+      commentOnly.fingerprints.staticSemantic
+    );
+
+    await writeFile(
+      path.join(dir, "tailwind.config.js"),
+      [
+        "module.exports = {",
+        "  theme: {",
+        "    colors: { primary: '#0891b2', accent: '#f59e0b' },",
+        "    borderRadius: { lg: '1rem' }",
+        "  }",
+        "};"
+      ].join("\n"),
+      "utf8"
+    );
+    const configChanged = await discoverStyle({ root: dir });
+    assert.notEqual(
+      configChanged.fingerprints.staticSemantic,
+      configCommentOnly.fingerprints.staticSemantic
+    );
+
+    await writeFile(
+      path.join(dir, "src", "styles", "tokens.css"),
+      ":root { --color-primary: #7c3aed; --radius-md: 0.375rem; }\n",
+      "utf8"
+    );
+    const tokenChanged = await discoverStyle({ root: dir });
+    assert.notEqual(
+      tokenChanged.fingerprints.staticSemantic,
+      configChanged.fingerprints.staticSemantic
+    );
+  });
+});
+
+test("inference cache is reused until normalized UI semantics change", async () => {
+  await withTempDir(async (dir) => {
+    await seedProject(dir);
+    await mkdir(path.join(dir, ".ai-ui"), { recursive: true });
+    await writeFile(
+      path.join(dir, ".ai-ui", "inferred-reference.md"),
+      "# 推断 UI 参考\n\n> 机器推断，待人工确认。\n",
+      "utf8"
+    );
+
+    const initial = await discoverStyle({ root: dir });
+    await recordInferenceCache({
+      root: dir,
+      snapshot: initial,
+      now: new Date("2026-07-17T08:00:00Z")
+    });
+    const valid = await discoverStyle({ root: dir });
+    assert.equal(valid.inferenceCache.status, "valid");
+
+    await writeFile(
+      path.join(dir, "src", "components", "Button.tsx"),
+      "// no UI effect\nexport const Button = () => null;",
+      "utf8"
+    );
+    const reusable = await discoverStyle({ root: dir });
+    assert.equal(reusable.inferenceCache.status, "reusable");
+
+    await writeFile(
+      path.join(dir, "src", "styles", "tokens.css"),
+      ":root { --color-primary: #dc2626; --radius-md: 0.75rem; }\n",
+      "utf8"
+    );
+    const stale = await discoverStyle({ root: dir });
+    assert.equal(stale.inferenceCache.status, "stale-semantic");
+
+    const forced = await discoverStyle({ root: dir, forceRefresh: true });
+    assert.equal(forced.inferenceCache.status, "forced-refresh");
+  });
+});
+
+test("graph evidence is optional and refreshed only after UI inputs change", async () => {
+  await withTempDir(async (dir) => {
+    await seedProject(dir);
+    await mkdir(path.join(dir, ".ai-ui"), { recursive: true });
+    await writeFile(
+      path.join(dir, ".ai-ui", "inferred-reference.md"),
+      "# 推断 UI 参考\n\n> 机器推断，待人工确认。\n",
+      "utf8"
+    );
+
+    const initial = await discoverStyle({ root: dir });
+    const graphPath = path.join(dir, ".ai-ui", "graph-evidence.json");
+    const graphEvidence = {
+      schemaVersion: 1,
+      inputFingerprint: initial.fingerprints.input,
+      provider: "codegraph",
+      sharedComponents: [
+        { name: "Button", path: "src/components/Button.tsx", callers: 3 }
+      ],
+      layouts: [],
+      pagePatterns: []
+    };
+    await writeFile(graphPath, JSON.stringify(graphEvidence, null, 2), "utf8");
+
+    const withGraph = await discoverStyle({ root: dir });
+    assert.equal(withGraph.graphEvidence.status, "valid");
+    await recordInferenceCache({ root: dir, snapshot: withGraph });
+
+    graphEvidence.sharedComponents[0].callers = 4;
+    await writeFile(graphPath, JSON.stringify(graphEvidence, null, 2), "utf8");
+    const sameReuseClass = await discoverStyle({ root: dir });
+    assert.equal(sameReuseClass.fingerprints.graph, withGraph.fingerprints.graph);
+    assert.equal(sameReuseClass.inferenceCache.status, "valid");
+
+    await writeFile(
+      path.join(dir, "src", "components", "Button.tsx"),
+      "// graph refresh only\nexport const Button = () => null;",
+      "utf8"
+    );
+    const graphStale = await discoverStyle({ root: dir });
+    assert.equal(graphStale.graphEvidence.status, "stale");
+    assert.equal(graphStale.inferenceCache.status, "graph-refresh-required");
+
+    graphEvidence.inputFingerprint = graphStale.fingerprints.input;
+    await writeFile(graphPath, JSON.stringify(graphEvidence, null, 2), "utf8");
+    const graphRefreshed = await discoverStyle({ root: dir });
+    assert.equal(graphRefreshed.graphEvidence.status, "valid");
+    assert.equal(graphRefreshed.inferenceCache.status, "reusable");
+  });
+});
+
+test("malformed optional graph fields do not block static discovery", async () => {
+  await withTempDir(async (dir) => {
+    await seedProject(dir);
+    const initial = await discoverStyle({ root: dir });
+    await mkdir(path.join(dir, ".ai-ui"), { recursive: true });
+    await writeFile(
+      path.join(dir, ".ai-ui", "graph-evidence.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        inputFingerprint: initial.fingerprints.input,
+        provider: "custom-graph",
+        sharedComponents: [{ name: "Button", callers: { unexpected: true } }],
+        pagePatterns: [{ name: "table-page", components: "DataTable" }]
+      }),
+      "utf8"
+    );
+
+    const snapshot = await discoverStyle({ root: dir });
+    assert.equal(snapshot.graphEvidence.status, "valid");
+    assert.match(snapshot.fingerprints.graph, /^sha256:/);
   });
 });
 
@@ -215,6 +423,8 @@ test("install hook writes Prototype to Existing UI AGENTS block", async () => {
     assert.match(agentsText, /<!-- gskills:start prototype-to-existing-ui -->/);
     assert.match(agentsText, /## Prototype to Existing UI/);
     assert.match(agentsText, /- Reuse existing design tokens/);
+    assert.match(agentsText, /Treat `\.ui-reference\/` as the human-confirmed source of truth/);
+    assert.match(agentsText, /CodeGraph or another code graph only as an optional enhancement/);
     assert.match(agentsText, /<!-- gskills:end prototype-to-existing-ui -->/);
 
     for (const entry of result.installed) {

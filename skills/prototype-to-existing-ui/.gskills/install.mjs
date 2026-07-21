@@ -5,6 +5,8 @@ const INSTRUCTIONS = [
   "## Prototype to Existing UI",
   "",
   "- When turning prototypes, wireframes, mockups, Figma exports, screenshots, or UI images into frontend pages, read `.ui-reference/` first; if absent, infer the project style from the codebase before coding.",
+  "- Treat `.ui-reference/` as the human-confirmed source of truth. Keep machine-derived snapshots and inferred drafts under `.ai-ui/`; do not create or overwrite `.ui-reference/` unless the user explicitly asks.",
+  "- Reuse a valid `.ai-ui/inferred-reference.md` cache. Use CodeGraph or another code graph only as an optional enhancement, and fall back to deterministic repository scanning when unavailable.",
   "- Reuse existing design tokens, theme colors, radii, spacing, fonts, components, and layout patterns; avoid one-off visual values and do not introduce a new component or style library unless the user asks.",
   "- Preserve the prototype's product intent and interactions while adapting colors, radii, spacing, fonts, and controls to the existing project style."
 ].join("\n");
