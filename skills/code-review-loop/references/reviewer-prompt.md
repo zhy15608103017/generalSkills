@@ -17,6 +17,8 @@
 - 只返回符合提供 schema 的 JSON。
 - 所有人类可读字段都必须使用简体中文，包括 `summary`、finding 的 `title`、`evidence`、`impact`、`suggested_fix` 和 `verification_notes`。
 - JSON 属性名和枚举值必须与 schema 完全一致，例如 `verdict`、`blocking_findings`、`P0`、`P1`、`pass`、`fail`、`needs_human`。
+- 每个 `blocking_findings` 和 `warnings` 的 finding 都必须填满 schema 的全部字段。`file` 必须是非空、真实的仓库相对路径；无法可靠定位行号时使用 `line: null`。
+- 不要为满足 schema 虚构文件路径。如果某条非阻塞的全局性提醒无法定位到真实文件，不要放进 `warnings`，改写为 `verification_notes`；这条规则同样适用于主审和二审。
 - 不要重写补丁内容。
 - 不要虚构文件、测试、API 或需求。
 - 不要假设当前 agent 一定正确理解了用户。判断代码前，先对照原始请求、后续纠正、澄清、反例和验收标准。

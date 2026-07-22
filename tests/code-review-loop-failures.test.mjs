@@ -300,6 +300,74 @@ test("parseReviewResult rejects incomplete pass payloads in strict mode", () => 
   );
 });
 
+test("parseReviewResult preserves a review when a complete P2/P3 warning only lacks file", () => {
+  const result = parseReviewResult(JSON.stringify(passResult({
+    warnings: [
+      {
+        severity: "P3",
+        title: "缺少文件定位的提醒",
+        line: null,
+        evidence: "这是跨文件的轻量提醒。",
+        impact: "不影响本次阻塞判断。",
+        suggested_fix: "在可定位时补充文件路径。",
+      },
+    ],
+  })));
+
+  assert.equal(result.verdict, "pass");
+  assert.deepEqual(result.warnings, []);
+  assert.match(result.verification_notes.join("\n"), /已忽略 1 条缺少文件定位的非阻塞 warning/);
+});
+
+test("parseReviewResult still rejects an unlocated blocking warning", () => {
+  assert.throws(
+    () => parseReviewResult(JSON.stringify(passResult({
+      warnings: [
+        {
+          severity: "P1",
+          title: "疑似阻塞问题",
+          line: null,
+          evidence: "可能影响用户。",
+          impact: "需要确认。",
+          suggested_fix: "补充文件定位后重新审查。",
+        },
+      ],
+    }))),
+    /warnings\[0\]\.file is missing or empty/,
+  );
+});
+
+test("runReviewPasses keeps primary and second results when both only omit P3 warning files", async () => {
+  const reviewers = [];
+  const reviewRun = await runReviewPasses({
+    brief: "brief",
+    assets: { systemPrompt: "prompt", schema: {}, providersConfig },
+    options: secondReviewerOptions(),
+    primaryResolved: { provider: "primary", model: "primary-model" },
+    secondResolved: { provider: "second", model: "second-model" },
+    callReviewModelFn: async ({ options }) => {
+      reviewers.push(options.usePrimaryEnv === false ? "second" : "primary");
+      return parseReviewResult(JSON.stringify(passResult({
+        warnings: [
+          {
+            severity: "P3",
+            title: "未定位的轻量提醒",
+            line: null,
+            evidence: "模型未能关联到具体文件。",
+            impact: "不影响阻塞结论。",
+            suggested_fix: "下次输出时提供文件路径。",
+          },
+        ],
+      })));
+    },
+  });
+
+  assert.deepEqual(reviewers.sort(), ["primary", "second"]);
+  assert.equal(reviewRun.result.verdict, "pass");
+  assert.deepEqual(reviewRun.result.reviewer_failures, []);
+  assert.match(reviewRun.result.verification_notes.join("\n"), /已忽略 1 条缺少文件定位的非阻塞 warning/);
+});
+
 for (const scenario of [
   {
     name: "missing API key",

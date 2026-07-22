@@ -29,4 +29,5 @@ Finding 严重级别：
 - JSON 属性名和枚举值必须与 schema 完全一致。
 - 不要基于提供之外的上下文臆造用户意图。
 - 当问题涉及需求上下文缺失、冲突或错误时，在 `file` 中引用 `.ai-review/review-context/current-request.md`。如果没有可靠行号，使用 `line: null`。
+- 每个 `blocking_findings` 和 `warnings` 的 finding 都必须填满 schema 的全部字段，且 `file` 必须是非空、真实的仓库相对路径。无法定位到真实文件的非阻塞提醒应写入 `verification_notes`，不要放进 `warnings`。
 - 如果当前理解缺失，不要从代码反推它；直接返回 `needs_human`。

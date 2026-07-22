@@ -1,9 +1,53 @@
 export function parseReviewResult(content, options = {}) {
   const raw = extractJson(content);
   if (options.strict !== false) {
+    recoverUnlocatedNonBlockingWarnings(raw);
     validateRawResult(raw);
   }
   return normalizeReviewResult(raw);
+}
+
+function recoverUnlocatedNonBlockingWarnings(result) {
+  if (
+    !result ||
+    typeof result !== "object" ||
+    Array.isArray(result) ||
+    !Array.isArray(result.warnings) ||
+    !Array.isArray(result.verification_notes)
+  ) {
+    return;
+  }
+
+  const recovered = [];
+  result.warnings = result.warnings.filter((warning, index) => {
+    if (!isRecoverableUnlocatedWarning(warning)) return true;
+    recovered.push(`${index + 1}. ${warning.title.trim()}`);
+    return false;
+  });
+
+  if (recovered.length > 0) {
+    result.verification_notes.push(
+      `已忽略 ${recovered.length} 条缺少文件定位的非阻塞 warning：${recovered.join("；")}。请为 warning 提供真实的仓库相对路径。`,
+    );
+  }
+}
+
+function isRecoverableUnlocatedWarning(warning) {
+  if (!warning || typeof warning !== "object" || Array.isArray(warning)) return false;
+  if (!["P2", "P3"].includes(warning.severity)) return false;
+  if (typeof warning.file === "string" && warning.file.trim()) return false;
+
+  const allowedKeys = new Set([
+    "severity", "title", "file", "line", "evidence", "impact", "suggested_fix",
+  ]);
+  if (Object.keys(warning).some((key) => !allowedKeys.has(key))) return false;
+  if (!["title", "evidence", "impact", "suggested_fix"].every(
+    (key) => typeof warning[key] === "string" && warning[key].trim(),
+  )) {
+    return false;
+  }
+  if (!("line" in warning)) return false;
+  return warning.line === null || (Number.isInteger(warning.line) && warning.line >= 1);
 }
 
 export function validateRawResult(result) {
